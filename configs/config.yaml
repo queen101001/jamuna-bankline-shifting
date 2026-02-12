@@ -1,0 +1,93 @@
+paths:
+  raw_xlsx: "data/raw/Distances (1).xlsx"
+  processed_dir: "data/processed"
+  models_dir: "models"
+
+data:
+  sheet_name: "Data"
+  n_reaches: 50
+  observed_years:
+    - 1991
+    - 1993
+    - 1995
+    - 1996
+    - 1997
+    - 1998
+    - 1999
+    - 2000
+    - 2001
+    - 2002
+    - 2003
+    - 2004
+    - 2005
+    - 2006
+    - 2007
+    - 2008
+    - 2009
+    - 2010
+    - 2012
+    - 2013
+    - 2014
+    - 2015
+    - 2016
+    - 2017
+    - 2018
+    - 2019
+    - 2020
+  splits:
+    train_end_year: 2010
+    val_end_year: 2015
+    test_start_year: 2016
+
+tft:
+  encoder_length: 10
+  prediction_length: 5
+  quantiles:
+    - 0.1
+    - 0.5
+    - 0.9
+  hidden_size: 64
+  attention_head_size: 4
+  dropout: 0.1
+  hidden_continuous_size: 32
+  lstm_layers: 2
+  batch_size: 64
+  max_epochs: 100
+  learning_rate: 0.001
+  gradient_clip_val: 0.1
+
+training:
+  early_stopping_patience: 15
+  reduce_lr_patience: 5
+  accelerator: "auto"
+  num_workers: 0
+  random_seed: 42
+
+mlflow:
+  tracking_uri: "mlruns"
+  experiment_name: "jamuna_tft"
+
+optuna:
+  n_trials: 50
+  timeout_seconds: 7200
+  study_name: "jamuna_tft_study"
+  storage: "sqlite:///optuna.db"
+
+anomaly:
+  changepoint:
+    model: "rbf"
+    penalty: 5
+    min_size: 2
+  autoencoder:
+    latent_dim: 16
+    hidden_size: 64
+    num_layers: 2
+    dropout: 0.1
+    kl_weight: 0.1
+    epochs: 100
+    threshold_percentile: 95.0
+
+api:
+  host: "0.0.0.0"
+  port: 8000
+  reload: false

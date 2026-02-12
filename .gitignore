@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Data and models (large files)
+data/processed/
+models/
+mlruns/
+optuna.db
+*.ckpt
+*.joblib
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Environment
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Next.js / frontend
+frontend/.next/
+frontend/node_modules/
+frontend/.env.local
+frontend/out/
+
+# Keep .env.local out of git (contains API URL)
+.env.local
