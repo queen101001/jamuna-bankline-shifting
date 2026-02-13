@@ -110,6 +110,8 @@ class APIConfig(BaseModel):
     host: str = "0.0.0.0"
     port: int = 8000
     reload: bool = False
+    cache_start_year: int = 2021
+    cache_end_year: int = 2040
 
 
 # ── Root settings ─────────────────────────────────────────────────────────────

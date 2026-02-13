@@ -13,6 +13,18 @@ export default function EvaluatePage() {
     queryFn: () => getEvaluation(split),
   });
 
+  function errorMessage() {
+    if (!error) return 'Failed to load metrics';
+    if (error.status === 404) return 'Run the evaluation script first: python -m src.training.evaluate --checkpoint <path>';
+    return error.message || 'Failed to load metrics';
+  }
+
+  function errorTitle() {
+    if (!error) return 'Failed to load metrics';
+    if (error.status === 404) return 'Metrics not generated yet';
+    return 'Failed to load metrics';
+  }
+
   return (
     <div className="max-w-5xl mx-auto px-4 py-8">
       {/* Header */}
@@ -62,12 +74,10 @@ export default function EvaluatePage() {
           style={{ background: 'var(--card)', borderColor: 'rgba(239,68,68,0.3)' }}
         >
           <p className="font-medium mb-1" style={{ color: '#ef4444' }}>
-            {error?.status === 404 ? 'Metrics not generated yet' : 'Failed to load metrics'}
+            {errorTitle()}
           </p>
           <p className="text-sm" style={{ color: 'var(--text-dim)' }}>
-            {error?.status === 404
-              ? 'Run the evaluation script first: python -m src.training.evaluate --checkpoint <path>'
-              : error?.message}
+            {errorMessage()}
           </p>
         </div>
       )}

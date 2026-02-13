@@ -70,6 +70,11 @@ def build_tft_dataset(
     if settings is None:
         settings = get_settings()
 
+    # PyTorch Forecasting requires static_categoricals to be string dtype
+    df = df.copy()
+    for col in _STATIC_CATEGORICALS:
+        df[col] = df[col].astype(str)
+
     tft = settings.tft
     min_enc = min_encoder_length if min_encoder_length is not None else tft.encoder_length // 2
 
@@ -92,10 +97,13 @@ def build_tft_dataset(
         time_varying_known_reals=["time_idx"],
         # Unknown future inputs (all observed features)
         time_varying_unknown_reals=_TIME_VARYING_UNKNOWN_REALS,
-        # Per-series normalization (critical for heterogeneous reach scales)
+        # Per-series normalization (critical for heterogeneous reach scales).
+        # transformation=None → standard z-score per group.
+        # softplus/log are avoided because bank_distance spans large negative
+        # values (up to -9800 m) which cause log(0) / -inf during encoding.
         target_normalizer=GroupNormalizer(
             groups=_STATIC_CATEGORICALS,
-            transformation="softplus",
+            transformation=None,
         ),
         # Helper features for TFT's temporal self-attention
         add_relative_time_idx=True,    # adds 0..1 normalized position
@@ -132,11 +140,20 @@ def make_dataloaders(
     tft = settings.tft
     tr = settings.training
 
+    import pandas as pd_local
+
     train_dataset = build_tft_dataset(train_df, settings)
+
+    # Val dataset must include the training rows as encoder context.
+    # With only 4 val years but encoder_length=10, val_df alone is too short
+    # to form any valid windows. Combining gives the model its full context.
+    train_val_df = pd_local.concat([train_df, val_df], ignore_index=True)
+    for col in _STATIC_CATEGORICALS:
+        train_val_df[col] = train_val_df[col].astype(str)
 
     val_dataset = TimeSeriesDataSet.from_dataset(
         train_dataset,
-        val_df,
+        train_val_df,
         predict=True,
         stop_randomization=True,
     )
@@ -184,6 +201,10 @@ def build_prediction_dataset(
     # Keep only the last enc_len time steps per group
     max_idx = df.groupby(["reach_id_enc", "bank_side_enc"])["time_idx"].transform("max")
     df_tail = df[df["time_idx"] > (max_idx - enc_len)].copy()
+
+    # Ensure string dtype for categoricals (required by PyTorch Forecasting)
+    for col in _STATIC_CATEGORICALS:
+        df_tail[col] = df_tail[col].astype(str)
 
     return TimeSeriesDataSet.from_dataset(
         train_dataset,

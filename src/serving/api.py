@@ -18,8 +18,7 @@ Background retraining uses ThreadPoolExecutor to avoid blocking.
 
 from __future__ import annotations
 
-import asyncio
-import threading
+import json
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -83,8 +82,10 @@ class AppState:
     n_series: int = 0
     last_training_date: str | None = None
     vae_loaded: bool = False
+    predictions_cache: dict[int, dict] = {}  # year → serialised YearPredictionResponse
+    cache_ready: bool = False
     _executor: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=1)
-    _train_jobs: dict[str, str] = {}  # job_id → status
+    _train_jobs: dict[str, dict] = {}  # job_id → {status, phase, logs}
 
 
 state = AppState()
@@ -138,6 +139,31 @@ async def lifespan(app: FastAPI):
                 "No trained model found. API will start but /predict will return 503. "
                 "Run: python -m src.training.train"
             )
+
+        # Load or build prediction cache
+        if state.model is not None:
+            cache_path = Path(settings.paths.models_dir) / "predictions_cache.json"
+            if cache_path.exists():
+                raw = json.loads(cache_path.read_text())
+                state.predictions_cache = {int(k): v for k, v in raw.items()}
+                state.cache_ready = True
+                logger.info(
+                    f"Prediction cache loaded from disk ({len(state.predictions_cache)} years)"
+                )
+            else:
+                logger.info(
+                    f"Building prediction cache for years "
+                    f"{settings.api.cache_start_year}–{settings.api.cache_end_year}…"
+                )
+                state.predictions_cache = _build_predictions_cache(settings)
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                cache_path.write_text(json.dumps(state.predictions_cache))
+                state.cache_ready = True
+                logger.info(
+                    f"Prediction cache built and saved ({len(state.predictions_cache)} years)"
+                )
+        else:
+            logger.info("Skipping cache build — no model loaded yet")
 
         # Run change-point detection
         logger.info("Running change-point detection...")
@@ -204,6 +230,8 @@ def health() -> HealthResponse:
         last_training_date=state.last_training_date,
         vae_loaded=state.vae_loaded,
         changepoints_loaded=state.changepoint_df is not None,
+        cache_ready=state.cache_ready,
+        cached_years=sorted(state.predictions_cache.keys()) if state.cache_ready else [],
     )
 
 
@@ -298,17 +326,30 @@ def predict_year(
     Predict bankline positions for ALL 100 series (50 reaches × left + right)
     at a single user-specified forecast year (2021–2099).
 
-    **Direct forecast (2021–2025):** Single TFT inference pass on real observed data.
-    Highest accuracy; q10/q90 intervals are narrow.
-
-    **Rolling forecast (2026–2099):** Iterative multi-step prediction. Each round
-    feeds the previous round's q50 predictions back as observed input for the next
-    round. Accuracy degrades with distance from the last observed year (2020).
-    Uncertainty intervals widen progressively — the frontend should visually
-    represent this widening to avoid misleading users.
-
-    This is the primary endpoint for the frontend map view.
+    Serves from pre-computed cache for years 2021–2040 (instantaneous).
+    Falls back to live inference for years outside the cache range.
     """
+    # Serve from cache if available
+    if state.cache_ready and year in state.predictions_cache:
+        cached = state.predictions_cache[year]
+        return YearPredictionResponse(
+            year=cached["year"],
+            last_observed_year=cached["last_observed_year"],
+            n_steps=cached["n_steps"],
+            n_points=cached["n_points"],
+            forecast_type=cached["forecast_type"],
+            accuracy_warning=cached.get("accuracy_warning"),
+            source="cache",
+            predictions=[YearPointForecast(**p) for p in cached["predictions"]],
+        )
+    # Fall back to live inference
+    result = _predict_year_internal(year)
+    result.source = "live"
+    return result
+
+
+def _predict_year_internal(year: int) -> YearPredictionResponse:
+    """Compute year prediction via live TFT inference (no cache)."""
     _require_model()
     assert state.df_full is not None
     assert state.settings is not None
@@ -327,11 +368,9 @@ def predict_year(
 
     n_steps = year - last_observed_year
     pred_len = state.settings.tft.prediction_length
-
     is_rolling = n_steps > pred_len
 
     if is_rolling:
-        # Iterative multi-step rolling forecast
         all_step_results = _rolling_forecast(
             model=state.model,
             df_full=state.df_full,
@@ -339,7 +378,6 @@ def predict_year(
             settings=state.settings,
             n_steps_total=n_steps,
         )
-        # Keep only the results for the exact target year
         target_results = [r for r in all_step_results if r["step"] == n_steps]
         points: list[YearPointForecast] = [
             YearPointForecast(
@@ -361,7 +399,6 @@ def predict_year(
         )
         forecast_type = "rolling"
     else:
-        # Direct single-pass TFT forecast
         full_request = PredictionRequest(
             reach_ids=list(range(1, 51)),
             bank_sides="both",
@@ -390,6 +427,7 @@ def predict_year(
         n_points=len(points),
         forecast_type=forecast_type,
         accuracy_warning=accuracy_warning,
+        source="live",
         predictions=points,
     )
 
@@ -475,7 +513,7 @@ def get_evaluation(
     Reads pre-computed metrics from data/processed/eval_results/ if available.
     Run python -m src.training.evaluate --checkpoint <path> to generate them.
     """
-    _require_model()
+    _require_data()
     assert state.settings is not None
 
     metrics_path = (
@@ -614,11 +652,24 @@ def trigger_training(request: TrainRequest) -> TrainResponse:
     assert state.settings is not None
 
     job_id = str(uuid.uuid4())
-    state._train_jobs[job_id] = "started"
+    state._train_jobs[job_id] = {"status": "started", "phase": "training", "logs": []}
 
     def _train_job() -> None:
+        job: dict = state._train_jobs[job_id]
+        job["status"] = "running"
+        job["phase"] = "training"
+
+        def _sink(message: object) -> None:
+            record = message.record  # type: ignore[union-attr]
+            line = f"{record['time'].strftime('%H:%M:%S')} | {record['level'].name:<8} | {record['message']}"
+            job["logs"].append(line)
+
+        sink_id = logger.add(_sink, format="{message}", level="DEBUG")
         try:
-            state._train_jobs[job_id] = "running"
+            job["logs"].append(
+                f"[{__import__('datetime').datetime.now().strftime('%H:%M:%S')}] "
+                f"Training job {job_id[:8]} started"
+            )
             from src.training.train import train_tft
 
             run_id = train_tft(
@@ -627,11 +678,49 @@ def trigger_training(request: TrainRequest) -> TrainResponse:
                 run_name=request.run_name or f"api_retrain_{job_id[:8]}",
                 overrides=dict(request.overrides),
             )
-            state._train_jobs[job_id] = f"completed:run_id={run_id}"
+            job["logs"].append(f"Training complete. MLflow run_id={run_id}")
+
+            # Auto-reload the new best checkpoint
+            job["phase"] = "model_reloading"
+            logger.info("Training done — reloading model checkpoint…")
+            try:
+                new_ckpt = load_best_checkpoint(state.settings)
+                state.model = load_tft_from_checkpoint(new_ckpt)
+                state.model.eval()
+                state.model_version = Path(new_ckpt).stem
+                state.last_training_date = str(Path(new_ckpt).stat().st_mtime)
+                logger.info(f"Model reloaded: {state.model_version}")
+            except Exception as reload_err:
+                logger.error(f"Model reload failed: {reload_err}")
+                raise
+
+            # Rebuild prediction cache
+            job["phase"] = "cache_building"
+            logger.info(
+                f"Building prediction cache for years "
+                f"{state.settings.api.cache_start_year}–{state.settings.api.cache_end_year}…"
+            )
+            state.cache_ready = False
+            state.predictions_cache = _build_predictions_cache(state.settings)
+            cache_path = Path(state.settings.paths.models_dir) / "predictions_cache.json"
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(json.dumps(state.predictions_cache))
+            state.cache_ready = True
+            logger.success(
+                f"Prediction cache ready — {len(state.predictions_cache)} years cached. "
+                "All year queries now served from cache."
+            )
+
+            job["phase"] = "ready"
+            job["status"] = f"completed:run_id={run_id}"
             logger.info(f"Background training job {job_id} completed: run_id={run_id}")
         except Exception as e:
-            state._train_jobs[job_id] = f"failed:{e}"
+            job["phase"] = "failed"
+            job["status"] = f"failed:{e}"
+            job["logs"].append(f"[ERROR] Job failed: {e}")
             logger.error(f"Background training job {job_id} failed: {e}")
+        finally:
+            logger.remove(sink_id)
 
     state._executor.submit(_train_job)
 
@@ -650,10 +739,54 @@ def get_train_status(job_id: str) -> dict[str, str]:
     """Poll the status of a background training job."""
     if job_id not in state._train_jobs:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-    return {"job_id": job_id, "status": state._train_jobs[job_id]}
+    return {"job_id": job_id, "status": state._train_jobs[job_id]["status"]}
+
+
+@app.get("/train/{job_id}/logs", tags=["Training"])
+def get_train_logs(
+    job_id: str,
+    since: int = Query(default=0, ge=0, description="Return log lines from this index onwards"),
+) -> dict:
+    """
+    Stream training log lines for a background job.
+
+    Poll this endpoint every 2 seconds. Pass `since=N` (where N is the
+    total lines received so far) to get only new lines since last poll.
+    """
+    if job_id not in state._train_jobs:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    job = state._train_jobs[job_id]
+    all_logs: list[str] = job.get("logs", [])
+    return {
+        "job_id": job_id,
+        "status": job["status"],
+        "phase": job.get("phase", "training"),
+        "logs": all_logs[since:],
+        "total": len(all_logs),
+    }
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
+
+
+def _build_predictions_cache(settings: Settings) -> dict[int, dict]:
+    """
+    Pre-compute predictions for every year in [cache_start_year, cache_end_year].
+
+    Returns a plain dict suitable for JSON serialisation:
+      {year: {year, last_observed_year, n_steps, n_points, forecast_type,
+              accuracy_warning, source, predictions: [...]}}
+    """
+    cache: dict[int, dict] = {}
+    start = settings.api.cache_start_year
+    end = settings.api.cache_end_year
+    for year in range(start, end + 1):
+        try:
+            result = _predict_year_internal(year)
+            cache[year] = result.model_dump()
+        except Exception as e:
+            logger.warning(f"Cache build skipped year {year}: {e}")
+    return cache
 
 
 def _rolling_forecast(

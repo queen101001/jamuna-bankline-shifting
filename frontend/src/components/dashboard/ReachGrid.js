@@ -11,7 +11,7 @@ export default function ReachGrid() {
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['yearPrediction', selectedYear],
     queryFn: () => getPredictionForYear(selectedYear),
-    keepPreviousData: true,
+    placeholderData: (prev) => prev,
   });
 
   if (isLoading) return <LoadingSpinner label={`Loading predictions for ${selectedYear}…`} />;

@@ -230,6 +230,8 @@ class HealthResponse(BaseModel):
     last_training_date: str | None
     vae_loaded: bool
     changepoints_loaded: bool
+    cache_ready: bool = False
+    cached_years: list[int] = []
 
 
 class TrainResponse(BaseModel):
@@ -288,5 +290,9 @@ class YearPredictionResponse(BaseModel):
             "Present for rolling forecasts. Describes expected accuracy degradation. "
             "Use q10/q90 intervals to convey uncertainty to the end user."
         ),
+    )
+    source: str = Field(
+        default="live",
+        description="'cache' if served from pre-computed cache, 'live' if computed on-demand",
     )
     predictions: list[YearPointForecast]

@@ -2,6 +2,8 @@ import { Geist, Geist_Mono } from 'next/font/google';
 import './globals.css';
 import NavBar from '@/components/nav/NavBar';
 import Providers from '@/components/Providers';
+import TrainingDrawer from '@/components/training/TrainingDrawer';
+import Toast from '@/components/training/Toast';
 
 const geistSans = Geist({ variable: '--font-geist-sans', subsets: ['latin'] });
 const geistMono = Geist_Mono({ variable: '--font-geist-mono', subsets: ['latin'] });
@@ -21,6 +23,8 @@ export default function RootLayout({ children }) {
           <main className="pt-16">
             {children}
           </main>
+          <TrainingDrawer />
+          <Toast />
         </Providers>
       </body>
     </html>
