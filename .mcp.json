@@ -1,0 +1,63 @@
+{
+    "mcpServers": {
+      "playwright-test": {
+        "command": "npx",
+        "args": [
+          "playwright",
+          "run-test-mcp-server"
+        ]
+      },
+      "jetbrains": {
+        "command": "/home/alpha/.local/share/JetBrains/Toolbox/apps/webstorm/jbr/bin/java",
+        "args": [
+          "-classpath",
+          "/home/alpha/.local/share/JetBrains/WebStorm2025.2/mcpserver/lib/mcpserver-frontend.jar:/home/alpha/.local/share/JetBrains/Toolbox/apps/webstorm/lib/util-8.jar:/home/alpha/.local/share/JetBrains/Toolbox/apps/webstorm/lib/modules/intellij.libraries.ktor.client.cio.jar:/home/alpha/.local/share/JetBrains/Toolbox/apps/webstorm/lib/lib-client.jar:/home/alpha/.local/share/JetBrains/Toolbox/apps/webstorm/lib/modules/intellij.libraries.ktor.client.jar",
+          "com.intellij.mcpserver.stdio.McpStdioRunnerKt"
+        ],
+        "env": {
+          "IJ_MCP_SERVER_PORT": "64342"
+        }
+      },
+      "next-devtools": {
+        "command": "npx",
+        "args": ["-y", "next-devtools-mcp@latest"]
+      },
+      "actors-mcp-server": {
+        "command": "npx",
+        "args": ["-y", "@apify/actors-mcp-server"]
+      },
+      "sequential-thinking": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@modelcontextprotocol/server-sequential-thinking"
+        ]
+      },
+      "chrome-devtools": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "chrome-devtools-mcp@latest",
+          "--headless",
+          "--isolated"
+        ]
+      },
+      "browsermcp": {
+        "command": "npx",
+        "args": ["@browsermcp/mcp@latest"]
+      },
+      "context7": {
+        "command": "docker",
+        "args": [
+          "run",
+          "-i",
+          "--rm",
+          "mcp/context7"
+        ]
+      },
+      "ddg-search": {
+        "command": "uvx",
+        "args": ["duckduckgo-mcp-server"]
+      }
+    }
+  }
