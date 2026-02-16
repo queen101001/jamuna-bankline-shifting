@@ -22,7 +22,7 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 import torch
 import torch.nn as nn
 from loguru import logger

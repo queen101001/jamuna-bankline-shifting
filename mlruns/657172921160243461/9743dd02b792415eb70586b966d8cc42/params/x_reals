@@ -1,0 +1,1 @@
+['encoder_length', 'bank_distance_center', 'bank_distance_scale', 'time_idx', 'relative_time_idx', 'bank_distance', 'erosion_indicator', 'erosion_rate', 'rate_of_change', 'rolling_mean_3', 'net_channel_erosion']

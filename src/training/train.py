@@ -11,14 +11,14 @@ from pathlib import Path
 
 import mlflow
 import mlflow.pytorch
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 from loguru import logger
-from pytorch_lightning.callbacks import (
+from lightning.pytorch.callbacks import (
     EarlyStopping,
     LearningRateMonitor,
     ModelCheckpoint,
 )
-from pytorch_lightning.loggers import MLFlowLogger
+from lightning.pytorch.loggers import MLFlowLogger
 
 from src.config import Settings, get_settings
 from src.data.dataset import make_dataloaders
@@ -121,7 +121,7 @@ def train_tft(
         callbacks=callbacks,
         logger=mlflow_logger,
         enable_progress_bar=True,
-        deterministic=True,
+        deterministic="warn",
         log_every_n_steps=1,
     )
 

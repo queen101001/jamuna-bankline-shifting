@@ -2,7 +2,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
-import { Waves, Activity, AlertTriangle, BarChart2, Play } from 'lucide-react';
+import { Waves, Activity, AlertTriangle, BarChart2, Play, FileCheck } from 'lucide-react';
 import { getHealth } from '@/lib/api';
 import StatusDot from '@/components/ui/StatusDot';
 import useAppStore from '@/store';
@@ -11,6 +11,7 @@ const links = [
   { href: '/', label: 'Dashboard', icon: Waves },
   { href: '/anomaly', label: 'Anomalies', icon: AlertTriangle },
   { href: '/evaluate', label: 'Metrics', icon: BarChart2 },
+  { href: '/validate', label: 'Validate', icon: FileCheck },
 ];
 
 export default function NavBar() {

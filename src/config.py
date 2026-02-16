@@ -20,7 +20,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class PathsConfig(BaseModel):
-    raw_xlsx: str = "data/raw/Distances (1).xlsx"
+    raw_xlsx: str = "dataset/proper-dataset.xlsx"
     processed_dir: str = "data/processed"
     models_dir: str = "models"
 
@@ -111,7 +111,7 @@ class APIConfig(BaseModel):
     port: int = 8000
     reload: bool = False
     cache_start_year: int = 2021
-    cache_end_year: int = 2040
+    cache_end_year: int = 2100
 
 
 # ── Root settings ─────────────────────────────────────────────────────────────

@@ -1,0 +1,8 @@
+GroupNormalizer(
+	method='standard',
+	groups=['reach_id_enc', 'bank_side_enc'],
+	center=True,
+	scale_by_group=False,
+	transformation=None,
+	method_kwargs={}
+)

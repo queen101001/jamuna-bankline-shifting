@@ -18,6 +18,13 @@ const useAppStore = create((set) => ({
   // Toast notification: { title, body } or null
   toastMessage: null,
   setToastMessage: (msg) => set({ toastMessage: msg }),
+
+  // Validation state
+  validationData: null,
+  setValidationData: (data) => set({ validationData: data }),
+  validationResults: null,
+  setValidationResults: (r) => set({ validationResults: r }),
+  clearValidation: () => set({ validationData: null, validationResults: null }),
 }));
 
 export default useAppStore;

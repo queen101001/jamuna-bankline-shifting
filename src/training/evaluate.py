@@ -73,6 +73,8 @@ def evaluate_tft(
     combined_df = pd.concat([context_df, eval_df]).sort_values(
         ["reach_id_enc", "bank_side_enc", "time_idx"]
     )
+    for col in ["reach_id_enc", "bank_side_enc"]:
+        combined_df[col] = combined_df[col].astype(str)
 
     # ── Dataset & loader ─────────────────────────────────────────────────────
     train_dataset, _, _ = make_dataloaders(train_df, val_df, settings)
@@ -97,11 +99,14 @@ def evaluate_tft(
 
     # ── Predictions ───────────────────────────────────────────────────────────
     with torch.no_grad():
-        raw_preds, raw_x = model.predict(
+        result = model.predict(
             eval_loader,
             mode="raw",
             return_x=True,
         )
+
+    raw_preds = result.output
+    raw_x = result.x
 
     # raw_preds["prediction"] shape: (n_windows, pred_len, n_quantiles)
     predictions_tensor = raw_preds["prediction"]
@@ -212,6 +217,8 @@ def evaluate_per_series(
             (context_df["bank_side_enc"] == side_enc)
         ]
         series_df = pd.concat([ctx, eval_series]).sort_values("time_idx")
+        for col in ["reach_id_enc", "bank_side_enc"]:
+            series_df[col] = series_df[col].astype(str)
 
         try:
             series_dataset = TimeSeriesDataSet.from_dataset(
@@ -340,6 +347,8 @@ def evaluate_lolo(
                 (context_df["bank_side_enc"] == side_enc)
             ]
             combined = pd.concat([ctx, test_series]).sort_values("time_idx")
+            for col in ["reach_id_enc", "bank_side_enc"]:
+                combined[col] = combined[col].astype(str)
 
             try:
                 ds = TimeSeriesDataSet.from_dataset(

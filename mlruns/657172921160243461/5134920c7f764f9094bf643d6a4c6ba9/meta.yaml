@@ -1,0 +1,14 @@
+artifact_uri: /home/dark_alpha/Desktop/puja/thesis-project-2/jamuna-bankline-shifting/mlruns/657172921160243461/5134920c7f764f9094bf643d6a4c6ba9/artifacts
+end_time: 1771094856382
+entry_point_name: ''
+experiment_id: '657172921160243461'
+lifecycle_stage: active
+run_id: 5134920c7f764f9094bf643d6a4c6ba9
+run_name: api_retrain_eb1ca4bb
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1771094785440
+status: 3
+tags: []
+user_id: dark_alpha

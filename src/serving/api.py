@@ -856,6 +856,7 @@ def _rolling_forecast(
         )
 
         # Collect q50/q10/q90 for all steps this round
+        # _last_valid tracks the most recent finite q50 per series for fallback
         round_preds: dict[tuple, list[float]] = {}  # (reach_id, bank_side) → [q50 per step]
         for i, (reach_id, bank_side) in enumerate(series_keys):
             if i >= preds_tensor.shape[0]:
@@ -864,12 +865,26 @@ def _rolling_forecast(
             key = (int(reach_id), str(bank_side))
             round_preds[key] = []
 
+            # Get the last known bank_distance as persistence fallback
+            prev_series = df_context[
+                (df_context["reach_id"] == int(reach_id))
+                & (df_context["bank_side"] == str(bank_side))
+            ].sort_values("time_idx")
+            fallback = float(prev_series["bank_distance"].iloc[-1])
+
             for t in range(steps_this_round):
                 step = step_offset + t + 1
                 year = last_observed_year + step
-                q50 = float(preds_i[t, q_med])
-                q10 = float(preds_i[t, q_low]) if q_low is not None else None
-                q90 = float(preds_i[t, q_hi]) if q_hi is not None else None
+                q50_raw = float(preds_i[t, q_med])
+                q10_raw = float(preds_i[t, q_low]) if q_low is not None else None
+                q90_raw = float(preds_i[t, q_hi]) if q_hi is not None else None
+
+                # Clamp NaN/Inf: fall back to last valid value
+                q50 = q50_raw if np.isfinite(q50_raw) else fallback
+                q10 = q10_raw if (q10_raw is not None and np.isfinite(q10_raw)) else q50
+                q90 = q90_raw if (q90_raw is not None and np.isfinite(q90_raw)) else q50
+                fallback = q50  # update fallback for next step
+
                 all_results.append({
                     "reach_id": int(reach_id),
                     "bank_side": str(bank_side),
@@ -895,7 +910,7 @@ def _rolling_forecast(
             for reach_id in range(1, 51):
                 left_bd = round_preds.get((reach_id, "left"), [None] * steps_this_round)[t]
                 right_bd = round_preds.get((reach_id, "right"), [None] * steps_this_round)[t]
-                if left_bd is not None and right_bd is not None:
+                if left_bd is not None and right_bd is not None and np.isfinite(left_bd) and np.isfinite(right_bd):
                     net_erosion[reach_id] = left_bd - right_bd
 
             for reach_id, bank_side in series_keys:
@@ -920,11 +935,13 @@ def _rolling_forecast(
                     (df_context["reach_id"] == reach_id)
                     & (df_context["bank_side"] == bank_side)
                 ].sort_values("time_idx")["bank_distance"].iloc[-2:].tolist()
+                # Filter out any non-finite values from history
+                prev2 = [v for v in prev2 if np.isfinite(v)]
 
                 erosion_indicator = q50 if bank_side == "left" else -q50
-                rate_of_change = q50 - prev_bd
-                erosion_rate = erosion_indicator - prev_ei
-                rolling_mean_3 = float(np.mean((prev2 + [q50])[-3:]))
+                rate_of_change = q50 - prev_bd if np.isfinite(prev_bd) else 0.0
+                erosion_rate = erosion_indicator - prev_ei if np.isfinite(prev_ei) else 0.0
+                rolling_mean_3 = float(np.mean((prev2 + [q50])[-3:])) if prev2 else q50
 
                 new_rows.append({
                     "reach_id": reach_id,

@@ -1,5 +1,5 @@
 paths:
-  raw_xlsx: "data/raw/Distances (1).xlsx"
+  raw_xlsx: "dataset/proper-dataset.xlsx"
   processed_dir: "data/processed"
   models_dir: "models"
 

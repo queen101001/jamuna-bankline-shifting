@@ -75,11 +75,11 @@ def build_tft_model(
         dropout=dropout or tft_cfg.dropout,
         hidden_continuous_size=hidden_continuous_size or tft_cfg.hidden_continuous_size,
         lstm_layers=lstm_layers or tft_cfg.lstm_layers,
-        output_size=[len(tft_cfg.quantiles)],   # [3] for [q10, q50, q90]
+        output_size=len(tft_cfg.quantiles),      # 3 for [q10, q50, q90]
         loss=QuantileLoss(quantiles=tft_cfg.quantiles),
-        log_interval=10,
+        log_interval=-1,
         reduce_on_plateau_patience=tr_cfg.reduce_lr_patience,
-        log_val_interval=1,
+        log_val_interval=-1,
     )
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
