@@ -2,6 +2,7 @@
 import useAppStore from '@/store';
 import ExcelUploader from '@/components/validate/ExcelUploader';
 import ValidationResults from '@/components/validate/ValidationResults';
+import InfoButton from '@/components/ui/InfoButton';
 
 export default function ValidatePage() {
   const { validationData } = useAppStore();
@@ -14,12 +15,14 @@ export default function ValidatePage() {
             Model Validation
           </h1>
           <p className="text-sm mt-1" style={{ color: 'var(--muted)' }}>
-            Upload an Excel file with observed bankline distances to compare against TFT predictions.
+            Upload an Excel file with observed bankline distances to compare against all 11 algorithms.
           </p>
         </div>
 
         {validationData ? <ValidationResults /> : <ExcelUploader />}
       </div>
+
+      <InfoButton pageId="validate" />
     </main>
   );
 }

@@ -5,6 +5,7 @@ import { Shield, Activity } from 'lucide-react';
 import { getChangepoints } from '@/lib/api';
 import ChangepointTable from '@/components/anomaly/ChangepointTable';
 import LoadingSpinner from '@/components/ui/LoadingSpinner';
+import InfoButton from '@/components/ui/InfoButton';
 
 export default function AnomalyPage() {
   const [protectedOnly, setProtectedOnly] = useState(false);
@@ -94,6 +95,8 @@ export default function AnomalyPage() {
       )}
 
       {data && <ChangepointTable changepoints={data.changepoints} />}
+
+      <InfoButton pageId="anomaly" />
     </div>
   );
 }

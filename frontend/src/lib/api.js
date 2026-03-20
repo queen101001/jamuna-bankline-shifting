@@ -63,3 +63,11 @@ export function getTrainStatus(jobId) {
 export function getTrainLogs(jobId, since = 0) {
   return request(`/train/${jobId}/logs?since=${since}`);
 }
+
+export function getBaselineYearPrediction(year, modelName) {
+  return request(`/predict/baseline/year/${year}?model_name=${encodeURIComponent(modelName)}`);
+}
+
+export function getEvaluateCompare() {
+  return request('/evaluate/compare');
+}

@@ -3,7 +3,9 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getEvaluation } from '@/lib/api';
 import MetricsPanel from '@/components/evaluate/MetricsPanel';
+import MetricsTable from '@/components/compare/MetricsTable';
 import LoadingSpinner from '@/components/ui/LoadingSpinner';
+import InfoButton from '@/components/ui/InfoButton';
 
 export default function EvaluatePage() {
   const [split, setSplit] = useState('test');
@@ -26,7 +28,7 @@ export default function EvaluatePage() {
   }
 
   return (
-    <div className="max-w-5xl mx-auto px-4 py-8">
+    <div className="max-w-6xl mx-auto px-4 py-8">
       {/* Header */}
       <div className="mb-8 flex items-start justify-between gap-4 flex-wrap">
         <div>
@@ -34,14 +36,7 @@ export default function EvaluatePage() {
             Model Performance
           </h1>
           <p className="text-sm" style={{ color: 'var(--text-dim)' }}>
-            TFT evaluation metrics. Run{' '}
-            <code
-              className="px-1.5 py-0.5 rounded text-xs"
-              style={{ background: 'var(--card)', color: 'var(--accent)' }}
-            >
-              python -m src.training.evaluate
-            </code>{' '}
-            to generate results.
+            Side-by-side comparison of all 11 algorithms. TFT detail metrics shown below for the selected split.
           </p>
         </div>
 
@@ -66,23 +61,40 @@ export default function EvaluatePage() {
         </div>
       </div>
 
-      {isLoading && <LoadingSpinner label="Loading evaluation metrics…" />}
+      {/* All-algorithm comparison table */}
+      <div className="mb-8">
+        <h2 className="text-sm font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--muted)' }}>
+          All Algorithms — Test Split
+        </h2>
+        <MetricsTable />
+      </div>
 
-      {isError && (
-        <div
-          className="rounded-xl p-6 border text-center"
-          style={{ background: 'var(--card)', borderColor: 'rgba(239,68,68,0.3)' }}
-        >
-          <p className="font-medium mb-1" style={{ color: '#ef4444' }}>
-            {errorTitle()}
-          </p>
-          <p className="text-sm" style={{ color: 'var(--text-dim)' }}>
-            {errorMessage()}
-          </p>
-        </div>
-      )}
+      {/* TFT detail metrics for selected split */}
+      <div>
+        <h2 className="text-sm font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--muted)' }}>
+          TFT Detail — {split === 'val' ? 'Validation' : 'Test'} Split
+        </h2>
 
-      {data && <MetricsPanel data={data} />}
+        {isLoading && <LoadingSpinner label="Loading evaluation metrics…" />}
+
+        {isError && (
+          <div
+            className="rounded-xl p-6 border text-center"
+            style={{ background: 'var(--card)', borderColor: 'rgba(239,68,68,0.3)' }}
+          >
+            <p className="font-medium mb-1" style={{ color: '#ef4444' }}>
+              {errorTitle()}
+            </p>
+            <p className="text-sm" style={{ color: 'var(--text-dim)' }}>
+              {errorMessage()}
+            </p>
+          </div>
+        )}
+
+        {data && <MetricsPanel data={data} />}
+      </div>
+
+      <InfoButton pageId="evaluate" />
     </div>
   );
 }

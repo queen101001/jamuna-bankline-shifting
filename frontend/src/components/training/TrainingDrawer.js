@@ -132,6 +132,7 @@ export default function TrainingDrawer() {
   const [startError, setStartError] = useState(null);
   const [copied, setCopied] = useState(false);
   const [toastVisible, setToastVisible] = useState(false);
+  const [trainTarget, setTrainTarget] = useState('tft');
 
   const logEndRef = useRef(null);
   const sinceRef = useRef(0);
@@ -209,7 +210,7 @@ export default function TrainingDrawer() {
     sinceRef.current = 0;
     prevPhaseRef.current = null;
     try {
-      const res = await postTrain({});
+      const res = await postTrain({ target: trainTarget });
       setTrainingJobId(res.job_id);
     } catch (e) {
       setStartError(e.message || 'Failed to start training');
@@ -324,11 +325,38 @@ export default function TrainingDrawer() {
                   Start Model Training
                 </p>
                 <p className="text-xs max-w-xs" style={{ color: 'var(--text-dim)' }}>
-                  Trains the TFT model on all 100 series. After training, the model will
-                  auto-reload and pre-compute predictions for 2021–2040 — all year queries
-                  will then be instant.
+                  Pre-trained models (.joblib / .ckpt) are loaded at startup — retraining
+                  is optional. Select a target below to retrain specific models.
                 </p>
               </div>
+
+              {/* Target selector */}
+              <div className="flex items-center gap-2">
+                <label className="text-xs font-medium" style={{ color: 'var(--muted)' }}>Target:</label>
+                <select
+                  value={trainTarget}
+                  onChange={(e) => setTrainTarget(e.target.value)}
+                  className="rounded-lg border px-3 py-1.5 text-xs bg-transparent outline-none"
+                  style={{ borderColor: 'var(--border)', color: 'var(--text)', background: 'var(--card)' }}
+                >
+                  <option value="tft" style={{ background: 'var(--bg)' }}>TFT (Temporal Fusion Transformer)</option>
+                  <option value="baselines" style={{ background: 'var(--bg)' }}>All Baselines (10 algorithms)</option>
+                  <option value="all" style={{ background: 'var(--bg)' }}>All Models (Baselines + TFT)</option>
+                  <optgroup label="Individual Baselines" style={{ background: 'var(--bg)' }}>
+                    <option value="persistence" style={{ background: 'var(--bg)' }}>Persistence</option>
+                    <option value="linear" style={{ background: 'var(--bg)' }}>Linear Extrapolation</option>
+                    <option value="arima" style={{ background: 'var(--bg)' }}>ARIMA</option>
+                    <option value="random_forest" style={{ background: 'var(--bg)' }}>Random Forest</option>
+                    <option value="exp_smoothing" style={{ background: 'var(--bg)' }}>Exponential Smoothing</option>
+                    <option value="xgboost" style={{ background: 'var(--bg)' }}>XGBoost</option>
+                    <option value="svr" style={{ background: 'var(--bg)' }}>SVR</option>
+                    <option value="gradient_boosting" style={{ background: 'var(--bg)' }}>Gradient Boosting</option>
+                    <option value="elastic_net" style={{ background: 'var(--bg)' }}>Elastic Net</option>
+                    <option value="knn" style={{ background: 'var(--bg)' }}>KNN Regression</option>
+                  </optgroup>
+                </select>
+              </div>
+
               {startError && (
                 <p className="text-xs text-center px-4" style={{ color: '#ef4444' }}>
                   {startError}

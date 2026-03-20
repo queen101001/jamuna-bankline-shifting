@@ -1,19 +1,36 @@
 'use client';
 import { use } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { getSeriesHistory, getChangepoints } from '@/lib/api';
+import { getSeriesHistory, getChangepoints, postPredictBaseline } from '@/lib/api';
+import useAppStore from '@/store';
 import SeriesHeader from '@/components/series/SeriesHeader';
 import HistoryChart from '@/components/series/HistoryChart';
+import AlgorithmSelector from '@/components/ui/AlgorithmSelector';
 import LoadingSpinner from '@/components/ui/LoadingSpinner';
 import QuantileBadge from '@/components/ui/QuantileBadge';
+import InfoButton from '@/components/ui/InfoButton';
 
 export default function SeriesPage({ params }) {
   const { reach_id, bank_side } = use(params);
   const reachId = parseInt(reach_id, 10);
+  const activeAlgorithm = useAppStore((s) => s.activeAlgorithm);
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['series', reachId, bank_side],
     queryFn: () => getSeriesHistory(reachId, bank_side, true),
+  });
+
+  // Fetch baseline forecast when a non-TFT algorithm is selected
+  const { data: baselineData } = useQuery({
+    queryKey: ['baselineSeries', reachId, bank_side, activeAlgorithm],
+    queryFn: () =>
+      postPredictBaseline({
+        reach_id: reachId,
+        bank_side,
+        model_name: activeAlgorithm,
+        n_steps: 5,
+      }),
+    enabled: activeAlgorithm !== 'tft',
   });
 
   const { data: cpData } = useQuery({
@@ -36,11 +53,18 @@ export default function SeriesPage({ params }) {
     );
   }
 
-  const forecast = data?.latest_forecast;
+  const forecast =
+    activeAlgorithm !== 'tft' && baselineData?.forecasts
+      ? baselineData.forecasts
+      : data?.latest_forecast;
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-8">
       <SeriesHeader reachId={reachId} bankSide={bank_side} seriesData={data} />
+
+      <div className="flex justify-end mb-4">
+        <AlgorithmSelector />
+      </div>
 
       <HistoryChart
         observations={data?.observations ?? []}
@@ -111,6 +135,8 @@ export default function SeriesPage({ params }) {
           </div>
         </div>
       )}
+
+      <InfoButton pageId="series" />
     </div>
   );
 }
