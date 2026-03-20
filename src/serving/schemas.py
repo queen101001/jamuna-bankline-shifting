@@ -83,7 +83,11 @@ class BaselineRequest(BaseModel):
     @field_validator("model_name")
     @classmethod
     def validate_model_name(cls, v: str) -> str:
-        allowed = {"persistence", "linear", "arima", "random_forest"}
+        allowed = {
+            "persistence", "linear", "arima", "random_forest",
+            "exp_smoothing", "xgboost", "svr", "gradient_boosting",
+            "elastic_net", "knn",
+        }
         if v.lower() not in allowed:
             raise ValueError(f"model_name must be one of {allowed}")
         return v.lower()
@@ -92,6 +96,13 @@ class BaselineRequest(BaseModel):
 class TrainRequest(BaseModel):
     """Request body for triggering model retraining."""
 
+    target: str = Field(
+        default="tft",
+        description=(
+            "Which model(s) to train: 'tft', 'baselines' (all 10), 'all' (baselines + TFT), "
+            "or a specific baseline name (e.g. 'arima', 'xgboost')"
+        ),
+    )
     experiment_name: str | None = Field(
         default=None,
         description="MLflow experiment name (uses config default if not set)",
@@ -232,6 +243,10 @@ class HealthResponse(BaseModel):
     changepoints_loaded: bool
     cache_ready: bool = False
     cached_years: list[int] = []
+    baseline_models_loaded: list[str] = Field(
+        default_factory=list,
+        description="Names of pre-trained baseline algorithms loaded in memory",
+    )
 
 
 class TrainResponse(BaseModel):
@@ -296,3 +311,20 @@ class YearPredictionResponse(BaseModel):
         description="'cache' if served from pre-computed cache, 'live' if computed on-demand",
     )
     predictions: list[YearPointForecast]
+
+
+class ModelMetrics(BaseModel):
+    """Metrics for a single model."""
+
+    model_name: str
+    nse: float | None
+    rmse: float | None
+    mae: float | None
+    kge: float | None
+    n_series: int = 0
+
+
+class CompareResponse(BaseModel):
+    """Response for GET /evaluate/compare — side-by-side model metrics."""
+
+    models: list[ModelMetrics]

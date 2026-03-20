@@ -18,6 +18,8 @@ Background retraining uses ThreadPoolExecutor to avoid blocking.
 
 from __future__ import annotations
 
+import src  # Applies torch.load patch (must be before other imports)
+
 import json
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -45,13 +47,16 @@ from src.data.dataset import build_prediction_dataset, make_dataloaders
 from src.data.loader import get_series_id, load_long_dataframe
 from src.data.preprocessing import run_preprocessing_pipeline, temporal_split
 from src.models.tft_wrapper import load_best_checkpoint, load_tft_from_checkpoint
+from src.models.baselines import BASELINE_NAME_MAP, BaseBaseline
 from src.serving.schemas import (
     AnomalyInfo,
     BaselineForecastResponse,
     BaselineRequest,
     ChangepointResponse,
+    CompareResponse,
     EvaluationResponse,
     HealthResponse,
+    ModelMetrics,
     PredictionRequest,
     PredictionResponse,
     QuantileForecast,
@@ -64,7 +69,7 @@ from src.serving.schemas import (
 )
 
 # Maximum forecast year supported by the rolling prediction engine
-_MAX_FORECAST_YEAR = 2099
+_MAX_FORECAST_YEAR = 2100
 
 
 # ── Application state ─────────────────────────────────────────────────────────
@@ -82,6 +87,7 @@ class AppState:
     n_series: int = 0
     last_training_date: str | None = None
     vae_loaded: bool = False
+    baseline_models: dict[str, dict[str, BaseBaseline]] = {}  # model_name → {key → fitted}
     predictions_cache: dict[int, dict] = {}  # year → serialised YearPredictionResponse
     cache_ready: bool = False
     _executor: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=1)
@@ -174,9 +180,27 @@ async def lifespan(app: FastAPI):
             f"{len(state.changepoint_df)} breakpoints detected"
         )
 
+        # Load pre-trained baseline models
+        baselines_dir = Path(settings.paths.baselines_dir)
+        if baselines_dir.exists():
+            for model_dir in sorted(baselines_dir.iterdir()):
+                if model_dir.is_dir():
+                    model_name = model_dir.name
+                    state.baseline_models[model_name] = {}
+                    for f in sorted(model_dir.glob("*.joblib")):
+                        state.baseline_models[model_name][f.stem] = BaseBaseline.load(f)
+            n_baselines = sum(len(v) for v in state.baseline_models.values())
+            logger.info(
+                f"Loaded {n_baselines} pre-trained baseline models "
+                f"({list(state.baseline_models.keys())})"
+            )
+        else:
+            logger.info("No pre-trained baselines found — run: python -m src.training.train_all_baselines")
+
         logger.info(
             f"API ready | {state.n_series} series | "
-            f"model={'loaded' if state.model else 'not loaded'}"
+            f"model={'loaded' if state.model else 'not loaded'} | "
+            f"baselines={list(state.baseline_models.keys()) or 'none'}"
         )
 
     except Exception as e:
@@ -232,6 +256,7 @@ def health() -> HealthResponse:
         changepoints_loaded=state.changepoint_df is not None,
         cache_ready=state.cache_ready,
         cached_years=sorted(state.predictions_cache.keys()) if state.cache_ready else [],
+        baseline_models_loaded=sorted(state.baseline_models.keys()),
     )
 
 
@@ -272,13 +297,14 @@ def predict(request: PredictionRequest) -> PredictionResponse:
         num_workers=0,
     )
 
-    # Run inference
+    # Run inference on CPU to avoid CUDA/CPU device mismatch in attention mask
     assert state.model is not None
     with torch.no_grad():
         raw_preds = state.model.predict(
             pred_loader,
             mode="raw",
             return_x=False,
+            trainer_kwargs={"accelerator": "cpu"},
         )
 
     predictions_tensor = raw_preds["prediction"]  # (N, pred_len, n_quantiles)
@@ -440,27 +466,14 @@ def predict_baseline(request: BaselineRequest) -> BaselineForecastResponse:
     """
     Run a named baseline model for a single (reach_id, bank_side) series.
 
-    Available models: persistence, linear, arima, random_forest.
-    Uses training split for fitting and returns n_steps forecasts.
+    Available models: persistence, linear, arima, random_forest,
+    exp_smoothing, xgboost, svr, gradient_boosting, elastic_net, knn.
+
+    Uses pre-trained model if available, otherwise fits on demand.
     """
     _require_data()
     assert state.df_full is not None
     assert state.settings is not None
-
-    from src.models.baselines import (
-        ARIMABaseline,
-        LinearExtrapolationBaseline,
-        PersistenceBaseline,
-        RandomForestBaseline,
-    )
-
-    model_map = {
-        "persistence": PersistenceBaseline(),
-        "linear": LinearExtrapolationBaseline(),
-        "arima": ARIMABaseline(),
-        "random_forest": RandomForestBaseline(),
-    }
-    baseline = model_map[request.model_name]
 
     series = state.df_full[
         (state.df_full["reach_id"] == request.reach_id)
@@ -473,11 +486,26 @@ def predict_baseline(request: BaselineRequest) -> BaselineForecastResponse:
             detail=f"Series not found: reach_id={request.reach_id}, bank_side={request.bank_side}",
         )
 
+    # Try pre-trained model first
+    key = f"{request.reach_id}_{request.bank_side}"
+    pretrained = state.baseline_models.get(request.model_name, {}).get(key)
+
     splits = state.settings.data.splits
     train_series = series[series["year"] <= splits.train_end_year]
 
+    if pretrained is not None:
+        baseline = pretrained
+    else:
+        # Fall back to fit-on-demand
+        if request.model_name not in BASELINE_NAME_MAP:
+            raise HTTPException(status_code=400, detail=f"Unknown model: {request.model_name}")
+        baseline = BASELINE_NAME_MAP[request.model_name]()
+        try:
+            baseline.fit(train_series)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Baseline fit failed: {e}")
+
     try:
-        baseline.fit(train_series)
         preds = baseline.predict(train_series, n_steps=request.n_steps)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Baseline prediction failed: {e}")
@@ -500,7 +528,166 @@ def predict_baseline(request: BaselineRequest) -> BaselineForecastResponse:
     )
 
 
+# ── Baseline year prediction (all 100 series) ────────────────────────────────
+
+
+@app.get("/predict/baseline/year/{year}", tags=["Prediction"])
+def predict_baseline_year(
+    year: Annotated[
+        int,
+        PathParam(
+            ge=2021,
+            le=_MAX_FORECAST_YEAR,
+            description="Forecast year for baseline prediction",
+        ),
+    ],
+    model_name: str = Query(..., description="Baseline model name"),
+) -> dict:
+    """
+    Predict bankline positions for all 100 series at a single year
+    using a named baseline model.
+    """
+    _require_data()
+    assert state.df_full is not None
+    assert state.settings is not None
+
+    if model_name not in BASELINE_NAME_MAP:
+        raise HTTPException(status_code=400, detail=f"Unknown model: {model_name}")
+
+    last_observed_year = int(state.df_full["year"].max())
+    n_steps = year - last_observed_year
+    if n_steps < 1:
+        raise HTTPException(status_code=400, detail=f"Year {year} is not a forecast year")
+
+    splits = state.settings.data.splits
+    series_groups = state.df_full.groupby(["reach_id", "bank_side"])
+    predictions = []
+
+    for (reach_id, bank_side), group in series_groups:
+        series = group.sort_values("year")
+        train_series = series[series["year"] <= splits.train_end_year]
+
+        # Try pre-trained model
+        key = f"{reach_id}_{bank_side}"
+        pretrained = state.baseline_models.get(model_name, {}).get(key)
+
+        if pretrained is not None:
+            baseline = pretrained
+        else:
+            baseline = BASELINE_NAME_MAP[model_name]()
+            try:
+                baseline.fit(train_series)
+            except Exception:
+                continue
+
+        try:
+            preds = baseline.predict(train_series, n_steps=n_steps)
+            predictions.append({
+                "reach_id": int(reach_id),
+                "bank_side": bank_side,
+                "series_id": get_series_id(int(reach_id), bank_side),
+                "q50": float(preds[-1]) if len(preds) > 0 else 0.0,
+                "q10": None,
+                "q90": None,
+            })
+        except Exception:
+            continue
+
+    return {
+        "year": year,
+        "last_observed_year": last_observed_year,
+        "n_steps": n_steps,
+        "n_points": len(predictions),
+        "forecast_type": "baseline",
+        "model_name": model_name,
+        "source": "pre-trained" if model_name in state.baseline_models else "on-demand",
+        "predictions": predictions,
+    }
+
+
 # ── Evaluation metrics ────────────────────────────────────────────────────────
+
+
+@app.get("/evaluate/compare", response_model=CompareResponse, tags=["Evaluation"])
+def evaluate_compare() -> CompareResponse:
+    """
+    Side-by-side performance metrics for TFT and all loaded baseline models.
+
+    Computes metrics on the test split (years after train_end_year).
+    """
+    _require_data()
+    assert state.df_full is not None
+    assert state.settings is not None
+
+    from src.models.baselines import compute_metrics
+
+    splits = state.settings.data.splits
+    results: list[ModelMetrics] = []
+
+    # TFT metrics from pre-computed CSV
+    tft_metrics_path = (
+        Path(state.settings.paths.processed_dir)
+        / "eval_results"
+        / "tft_metrics_test.csv"
+    )
+    if tft_metrics_path.exists():
+        tft_df = pd.read_csv(tft_metrics_path)
+        if len(tft_df) > 0:
+            row = tft_df.iloc[0].to_dict()
+            results.append(ModelMetrics(
+                model_name="tft",
+                nse=row.get("NSE"),
+                rmse=row.get("RMSE"),
+                mae=row.get("MAE"),
+                kge=row.get("KGE"),
+                n_series=state.n_series,
+            ))
+
+    # Baseline metrics — evaluate each loaded baseline on test split
+    for model_name, models_dict in sorted(state.baseline_models.items()):
+        all_nse, all_rmse, all_mae, all_kge = [], [], [], []
+        for key, model in models_dict.items():
+            parts = key.rsplit("_", 1)
+            if len(parts) != 2:
+                continue
+            reach_id, bank_side = int(parts[0]), parts[1]
+
+            series = state.df_full[
+                (state.df_full["reach_id"] == reach_id)
+                & (state.df_full["bank_side"] == bank_side)
+            ].sort_values("year")
+
+            train = series[series["year"] <= splits.train_end_year]
+            test = series[series["year"] > splits.train_end_year]
+            if len(test) == 0 or len(train) < 2:
+                continue
+
+            try:
+                preds = model.predict(train, n_steps=len(test))
+                actuals = test["bank_distance"].values
+                m = compute_metrics(actuals, preds)
+                if not np.isnan(m["NSE"]):
+                    all_nse.append(m["NSE"])
+                if not np.isnan(m["RMSE"]):
+                    all_rmse.append(m["RMSE"])
+                if not np.isnan(m["MAE"]):
+                    all_mae.append(m["MAE"])
+                if not np.isnan(m["KGE"]):
+                    all_kge.append(m["KGE"])
+            except Exception:
+                continue
+
+        n_eval = max(len(all_nse), 1)
+        results.append(ModelMetrics(
+            model_name=model_name,
+            nse=float(np.mean(all_nse)) if all_nse else None,
+            rmse=float(np.mean(all_rmse)) if all_rmse else None,
+            mae=float(np.mean(all_mae)) if all_mae else None,
+            kge=float(np.mean(all_kge)) if all_kge else None,
+            n_series=n_eval,
+        ))
+
+    return CompareResponse(models=results)
 
 
 @app.get("/evaluate", response_model=EvaluationResponse, tags=["Evaluation"])
@@ -654,6 +841,8 @@ def trigger_training(request: TrainRequest) -> TrainResponse:
     job_id = str(uuid.uuid4())
     state._train_jobs[job_id] = {"status": "started", "phase": "training", "logs": []}
 
+    target = request.target.lower()
+
     def _train_job() -> None:
         job: dict = state._train_jobs[job_id]
         job["status"] = "running"
@@ -668,52 +857,105 @@ def trigger_training(request: TrainRequest) -> TrainResponse:
         try:
             job["logs"].append(
                 f"[{__import__('datetime').datetime.now().strftime('%H:%M:%S')}] "
-                f"Training job {job_id[:8]} started"
+                f"Training job {job_id[:8]} started (target={target})"
             )
-            from src.training.train import train_tft
 
-            run_id = train_tft(
-                settings=state.settings,
-                experiment_name=request.experiment_name,
-                run_name=request.run_name or f"api_retrain_{job_id[:8]}",
-                overrides=dict(request.overrides),
-            )
-            job["logs"].append(f"Training complete. MLflow run_id={run_id}")
+            train_baselines = target in ("baselines", "all") or target in BASELINE_NAME_MAP
+            train_tft_model = target in ("tft", "all")
 
-            # Auto-reload the new best checkpoint
-            job["phase"] = "model_reloading"
-            logger.info("Training done — reloading model checkpoint…")
-            try:
-                new_ckpt = load_best_checkpoint(state.settings)
-                state.model = load_tft_from_checkpoint(new_ckpt)
-                state.model.eval()
-                state.model_version = Path(new_ckpt).stem
-                state.last_training_date = str(Path(new_ckpt).stat().st_mtime)
-                logger.info(f"Model reloaded: {state.model_version}")
-            except Exception as reload_err:
-                logger.error(f"Model reload failed: {reload_err}")
-                raise
+            # ── Train baselines ──────────────────────────────────────────
+            if train_baselines:
+                from src.training._baseline_trainer import train_single_baseline
 
-            # Rebuild prediction cache
-            job["phase"] = "cache_building"
-            logger.info(
-                f"Building prediction cache for years "
-                f"{state.settings.api.cache_start_year}–{state.settings.api.cache_end_year}…"
-            )
-            state.cache_ready = False
-            state.predictions_cache = _build_predictions_cache(state.settings)
-            cache_path = Path(state.settings.paths.models_dir) / "predictions_cache.json"
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            cache_path.write_text(json.dumps(state.predictions_cache))
-            state.cache_ready = True
-            logger.success(
-                f"Prediction cache ready — {len(state.predictions_cache)} years cached. "
-                "All year queries now served from cache."
-            )
+                if target in BASELINE_NAME_MAP:
+                    # Train a single baseline algorithm
+                    model_cls = BASELINE_NAME_MAP[target]
+                    job["logs"].append(f"Training single baseline: {target}")
+                    saved = train_single_baseline(model_cls, state.settings)
+                    job["logs"].append(f"Saved {saved} {target} models")
+                else:
+                    # Train all 10 baselines
+                    from src.models.baselines import ALL_BASELINE_CLASSES
+
+                    job["logs"].append(
+                        f"Training all {len(ALL_BASELINE_CLASSES)} baseline algorithms..."
+                    )
+                    total_saved = 0
+                    for cls in ALL_BASELINE_CLASSES:
+                        try:
+                            saved = train_single_baseline(cls, state.settings)
+                            total_saved += saved
+                            job["logs"].append(f"  {cls.name}: {saved} models saved")
+                        except Exception as e:
+                            logger.error(f"Failed to train {cls.name}: {e}")
+                            job["logs"].append(f"  {cls.name}: FAILED — {e}")
+                    job["logs"].append(f"Baseline training complete: {total_saved} models saved")
+
+                # Reload baseline models into memory
+                job["phase"] = "model_reloading"
+                logger.info("Reloading baseline models into memory…")
+                baselines_root = Path(state.settings.paths.baselines_dir)
+                loaded_count = 0
+                for model_dir in baselines_root.iterdir():
+                    if not model_dir.is_dir():
+                        continue
+                    algo_name = model_dir.name
+                    state.baseline_models.setdefault(algo_name, {})
+                    for jf in model_dir.glob("*.joblib"):
+                        key = jf.stem  # e.g. "1_right"
+                        state.baseline_models[algo_name][key] = BaseBaseline.load(jf)
+                        loaded_count += 1
+                logger.info(f"Reloaded {loaded_count} baseline models")
+                job["logs"].append(f"Reloaded {loaded_count} baseline models into memory")
+
+            # ── Train TFT ────────────────────────────────────────────────
+            if train_tft_model:
+                job["phase"] = "training"
+                from src.training.train import train_tft
+
+                run_id = train_tft(
+                    settings=state.settings,
+                    experiment_name=request.experiment_name,
+                    run_name=request.run_name or f"api_retrain_{job_id[:8]}",
+                    overrides=dict(request.overrides),
+                )
+                job["logs"].append(f"TFT training complete. MLflow run_id={run_id}")
+
+                # Auto-reload the new best checkpoint
+                job["phase"] = "model_reloading"
+                logger.info("Training done — reloading model checkpoint…")
+                try:
+                    new_ckpt = load_best_checkpoint(state.settings)
+                    state.model = load_tft_from_checkpoint(new_ckpt)
+                    state.model.eval()
+                    state.model_version = Path(new_ckpt).stem
+                    state.last_training_date = str(Path(new_ckpt).stat().st_mtime)
+                    logger.info(f"Model reloaded: {state.model_version}")
+                except Exception as reload_err:
+                    logger.error(f"Model reload failed: {reload_err}")
+                    raise
+
+                # Rebuild prediction cache
+                job["phase"] = "cache_building"
+                logger.info(
+                    f"Building prediction cache for years "
+                    f"{state.settings.api.cache_start_year}–"
+                    f"{state.settings.api.cache_end_year}…"
+                )
+                state.cache_ready = False
+                state.predictions_cache = _build_predictions_cache(state.settings)
+                cache_path = Path(state.settings.paths.models_dir) / "predictions_cache.json"
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                cache_path.write_text(json.dumps(state.predictions_cache))
+                state.cache_ready = True
+                logger.success(
+                    f"Prediction cache ready — {len(state.predictions_cache)} years cached. "
+                    "All year queries now served from cache."
+                )
 
             job["phase"] = "ready"
-            job["status"] = f"completed:run_id={run_id}"
-            logger.info(f"Background training job {job_id} completed: run_id={run_id}")
+            job["status"] = f"completed:target={target}"
+            logger.info(f"Background training job {job_id} completed (target={target})")
         except Exception as e:
             job["phase"] = "failed"
             job["status"] = f"failed:{e}"
@@ -728,7 +970,7 @@ def trigger_training(request: TrainRequest) -> TrainResponse:
         job_id=job_id,
         status="started",
         message=(
-            f"Training started in background. "
+            f"Training '{target}' started in background. "
             f"Poll GET /train/{job_id}/status for updates."
         ),
     )
@@ -832,8 +1074,41 @@ def _rolling_forecast(
     all_results: list[dict] = []
     step_offset = 0
 
+    # Move model to CPU for inference to avoid CUDA/CPU device mismatch
+    # in attention mask construction (pytorch-forecasting bug).
+    original_device = next(model.parameters()).device
+    if original_device.type != "cpu":
+        model = model.cpu()
+        logger.info("Moved model to CPU for rolling forecast inference")
+
     while step_offset < n_steps_total:
         steps_this_round = min(pred_len, n_steps_total - step_offset)
+
+        # --- NaN guard: fill any NaN/Inf in bank_distance before building dataset ---
+        nan_mask = ~np.isfinite(df_context["bank_distance"])
+        if nan_mask.any():
+            n_bad = int(nan_mask.sum())
+            logger.warning(
+                f"Rolling forecast round {step_offset // pred_len + 1}: "
+                f"found {n_bad} NaN/Inf bank_distance values, forward-filling"
+            )
+            # Forward-fill within each series, then back-fill any remaining leading NaNs
+            df_context["bank_distance"] = (
+                df_context.groupby(["reach_id", "bank_side"])["bank_distance"]
+                .transform(lambda s: s.ffill().bfill())
+            )
+            # Also fix derived features that may have gone NaN
+            for col in [
+                "erosion_indicator", "rate_of_change", "erosion_rate",
+                "rolling_mean_3", "net_channel_erosion",
+            ]:
+                if col in df_context.columns:
+                    col_nan = ~np.isfinite(df_context[col])
+                    if col_nan.any():
+                        df_context[col] = (
+                            df_context.groupby(["reach_id", "bank_side"])[col]
+                            .transform(lambda s: s.ffill().bfill().fillna(0.0))
+                        )
 
         # Build prediction dataset from current context (last enc_len per series)
         pred_dataset = build_prediction_dataset(df_context, train_dataset, settings)
@@ -842,7 +1117,10 @@ def _rolling_forecast(
         )
 
         with torch.no_grad():
-            raw_preds = model.predict(pred_loader, mode="raw", return_x=False)
+            raw_preds = model.predict(
+                pred_loader, mode="raw", return_x=False,
+                trainer_kwargs={"accelerator": "cpu"},
+            )
 
         preds_tensor = raw_preds["prediction"]  # (N, pred_len, n_quantiles)
 
@@ -898,20 +1176,21 @@ def _rolling_forecast(
                 round_preds[key].append(q50)
 
         # Build synthetic rows for the next encoder window
-        # First, compute net_channel_erosion per (reach_id, year) using q50 values
         new_rows: list[dict] = []
         for t in range(steps_this_round):
             step = step_offset + t + 1
             year = last_observed_year + step
             time_idx = last_time_idx + step
 
-            # net_channel_erosion = left_bank_distance − right_bank_distance
+            # Compute net_channel_erosion if the column exists in context
+            has_net_erosion = "net_channel_erosion" in df_context.columns
             net_erosion: dict[int, float] = {}
-            for reach_id in range(1, 51):
-                left_bd = round_preds.get((reach_id, "left"), [None] * steps_this_round)[t]
-                right_bd = round_preds.get((reach_id, "right"), [None] * steps_this_round)[t]
-                if left_bd is not None and right_bd is not None and np.isfinite(left_bd) and np.isfinite(right_bd):
-                    net_erosion[reach_id] = left_bd - right_bd
+            if has_net_erosion:
+                for reach_id in range(1, 51):
+                    left_bd = round_preds.get((reach_id, "left"), [None] * steps_this_round)[t]
+                    right_bd = round_preds.get((reach_id, "right"), [None] * steps_this_round)[t]
+                    if left_bd is not None and right_bd is not None and np.isfinite(left_bd) and np.isfinite(right_bd):
+                        net_erosion[reach_id] = left_bd - right_bd
 
             for reach_id, bank_side in series_keys:
                 reach_id = int(reach_id)
@@ -929,35 +1208,39 @@ def _rolling_forecast(
                 ].sort_values("time_idx").iloc[-1]
 
                 prev_bd = float(prev["bank_distance"])
-                prev_ei = float(prev["erosion_indicator"])
                 # Rolling mean uses last 2 known + current predicted
                 prev2 = df_context[
                     (df_context["reach_id"] == reach_id)
                     & (df_context["bank_side"] == bank_side)
                 ].sort_values("time_idx")["bank_distance"].iloc[-2:].tolist()
-                # Filter out any non-finite values from history
                 prev2 = [v for v in prev2 if np.isfinite(v)]
 
                 erosion_indicator = q50 if bank_side == "left" else -q50
-                rate_of_change = q50 - prev_bd if np.isfinite(prev_bd) else 0.0
-                erosion_rate = erosion_indicator - prev_ei if np.isfinite(prev_ei) else 0.0
                 rolling_mean_3 = float(np.mean((prev2 + [q50])[-3:])) if prev2 else q50
 
-                new_rows.append({
+                row: dict = {
                     "reach_id": reach_id,
                     "bank_side": bank_side,
                     "year": year,
                     "bank_distance": q50,
                     "time_idx": time_idx,
                     "erosion_indicator": erosion_indicator,
-                    "rate_of_change": rate_of_change,
-                    "erosion_rate": erosion_rate,
                     "rolling_mean_3": rolling_mean_3,
-                    "net_channel_erosion": net_erosion.get(reach_id, 0.0),
                     "reach_id_enc": reach_id - 1,
                     "bank_side_enc": 1 if bank_side == "right" else 0,
                     "series_id": _get_series_id(reach_id, bank_side),
-                })
+                }
+
+                # Include optional features only if they exist in context
+                if "rate_of_change" in df_context.columns:
+                    row["rate_of_change"] = q50 - prev_bd if np.isfinite(prev_bd) else 0.0
+                if "erosion_rate" in df_context.columns:
+                    prev_ei = float(prev["erosion_indicator"])
+                    row["erosion_rate"] = erosion_indicator - prev_ei if np.isfinite(prev_ei) else 0.0
+                if has_net_erosion:
+                    row["net_channel_erosion"] = net_erosion.get(reach_id, 0.0)
+
+                new_rows.append(row)
 
         if new_rows:
             df_context = pd.concat(
@@ -965,6 +1248,11 @@ def _rolling_forecast(
             )
 
         step_offset += steps_this_round
+
+    # Restore model to original device
+    if original_device.type != "cpu":
+        model = model.to(original_device)
+        logger.info(f"Restored model to {original_device}")
 
     return all_results
 
