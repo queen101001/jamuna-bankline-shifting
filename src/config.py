@@ -23,6 +23,7 @@ class PathsConfig(BaseModel):
     raw_xlsx: str = "dataset/proper-dataset.xlsx"
     processed_dir: str = "data/processed"
     models_dir: str = "models"
+    baselines_dir: str = "models/baselines"
 
 
 class SplitsConfig(BaseModel):
@@ -51,18 +52,19 @@ class DataConfig(BaseModel):
 
 
 class TFTConfig(BaseModel):
-    encoder_length: int = 10
-    prediction_length: int = 5
+    encoder_length: int = 5
+    prediction_length: int = 3
     quantiles: list[float] = Field(default=[0.1, 0.5, 0.9])
-    hidden_size: int = 64
-    attention_head_size: int = 4
-    dropout: float = 0.1
-    hidden_continuous_size: int = 32
-    lstm_layers: int = 2
-    batch_size: int = 64
-    max_epochs: int = 100
-    learning_rate: float = 0.001
-    gradient_clip_val: float = 0.1
+    hidden_size: int = 16
+    attention_head_size: int = 1
+    dropout: float = 0.3
+    hidden_continuous_size: int = 8
+    lstm_layers: int = 1
+    batch_size: int = 16
+    max_epochs: int = 300
+    learning_rate: float = 0.01
+    gradient_clip_val: float = 0.5
+    weight_decay: float = 0.001
 
 
 class TrainingConfig(BaseModel):

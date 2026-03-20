@@ -12,11 +12,16 @@ A TFT that cannot beat persistence is not learning useful patterns.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from loguru import logger
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
+from sklearn.linear_model import ElasticNet
+from sklearn.neighbors import KNeighborsRegressor
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVR
 
 
 # ── Metric computation ────────────────────────────────────────────────────────
@@ -96,6 +101,21 @@ class BaseBaseline(ABC):
         -------
         np.ndarray of shape (n_steps,)
         """
+
+    def save(self, path: str | Path) -> None:
+        """Serialize fitted model to disk via joblib."""
+        import joblib
+
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        joblib.dump(self, p)
+
+    @classmethod
+    def load(cls, path: str | Path) -> "BaseBaseline":
+        """Load a fitted model from disk."""
+        import joblib
+
+        return joblib.load(path)
 
     def evaluate(
         self,
@@ -286,6 +306,354 @@ class RandomForestBaseline(BaseBaseline):
         return np.array(preds)
 
 
+# ── Additional baseline implementations ──────────────────────────────────────
+
+
+class ExponentialSmoothingBaseline(BaseBaseline):
+    """
+    Holt's linear trend exponential smoothing.
+
+    Captures level + trend with exponential decay weighting.
+    Good for short series with clear monotonic behaviour.
+    """
+
+    name = "exp_smoothing"
+    _model: object = None
+    _fallback: float = 0.0
+
+    def fit(self, series_df: pd.DataFrame) -> None:
+        import warnings
+
+        from statsmodels.tsa.holtwinters import ExponentialSmoothing
+
+        values = series_df.sort_values("year")["bank_distance"].dropna().to_numpy()
+        if len(values) < 3:
+            logger.warning("Not enough data for Holt ES, using persistence fallback")
+            self._model = None
+            self._fallback = float(values[-1]) if len(values) else 0.0
+            return
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            self._model = ExponentialSmoothing(
+                values, trend="add", seasonal=None,
+            ).fit(optimized=True)
+
+    def predict(self, history_df: pd.DataFrame, n_steps: int) -> np.ndarray:
+        if self._model is None:
+            return np.full(n_steps, self._fallback)
+        return np.asarray(self._model.forecast(n_steps))
+
+
+class XGBoostBaseline(BaseBaseline):
+    """
+    XGBoost with recursive multi-step forecasting using lag features.
+
+    Same feature engineering as RandomForestBaseline (lag_1..3, rate_of_change,
+    rolling_mean_3) but uses gradient boosting for potentially better accuracy.
+    """
+
+    name = "xgboost"
+    _model: object = None
+    _n_lags: int = 3
+    _fallback: float = 0.0
+
+    def _make_features(self, values: list[float]) -> np.ndarray:
+        n = len(values)
+        lag1 = values[-1] if n >= 1 else 0.0
+        lag2 = values[-2] if n >= 2 else lag1
+        lag3 = values[-3] if n >= 3 else lag1
+        roc = (values[-1] - values[-2]) if n >= 2 else 0.0
+        roll3 = float(np.mean(values[-3:])) if n >= 3 else float(np.mean(values))
+        return np.array([[lag1, lag2, lag3, roc, roll3]])
+
+    def fit(self, series_df: pd.DataFrame) -> None:
+        from xgboost import XGBRegressor
+
+        s = series_df.sort_values("year")["bank_distance"].dropna().tolist()
+        if len(s) < self._n_lags + 2:
+            logger.warning("Not enough data for XGBoost baseline, using persistence fallback")
+            self._model = None
+            self._fallback = s[-1] if s else 0.0
+            return
+
+        X_list, y_list = [], []
+        for i in range(self._n_lags, len(s)):
+            X_list.append(self._make_features(s[:i]).flatten())
+            y_list.append(s[i])
+
+        self._model = XGBRegressor(
+            n_estimators=200, max_depth=5, learning_rate=0.1,
+            random_state=42, verbosity=0,
+        )
+        self._model.fit(np.array(X_list), np.array(y_list))
+
+    def predict(self, history_df: pd.DataFrame, n_steps: int) -> np.ndarray:
+        if self._model is None:
+            return np.full(n_steps, self._fallback)
+        history = history_df.sort_values("year")["bank_distance"].dropna().tolist()
+        preds = []
+        for _ in range(n_steps):
+            x = self._make_features(history)
+            p = float(self._model.predict(x)[0])
+            preds.append(p)
+            history.append(p)
+        return np.array(preds)
+
+
+class SVRBaseline(BaseBaseline):
+    """
+    Support Vector Regression with RBF kernel and lag features.
+
+    Effective for small datasets due to kernel-based generalisation.
+    Features are scaled with StandardScaler for SVR convergence.
+    """
+
+    name = "svr"
+    _model: SVR | None = None
+    _scaler: StandardScaler | None = None
+    _n_lags: int = 3
+    _fallback: float = 0.0
+
+    def _make_features(self, values: list[float]) -> np.ndarray:
+        n = len(values)
+        lag1 = values[-1] if n >= 1 else 0.0
+        lag2 = values[-2] if n >= 2 else lag1
+        lag3 = values[-3] if n >= 3 else lag1
+        roc = (values[-1] - values[-2]) if n >= 2 else 0.0
+        roll3 = float(np.mean(values[-3:])) if n >= 3 else float(np.mean(values))
+        return np.array([[lag1, lag2, lag3, roc, roll3]])
+
+    def fit(self, series_df: pd.DataFrame) -> None:
+        s = series_df.sort_values("year")["bank_distance"].dropna().tolist()
+        if len(s) < self._n_lags + 2:
+            logger.warning("Not enough data for SVR baseline, using persistence fallback")
+            self._model = None
+            self._fallback = s[-1] if s else 0.0
+            return
+
+        X_list, y_list = [], []
+        for i in range(self._n_lags, len(s)):
+            X_list.append(self._make_features(s[:i]).flatten())
+            y_list.append(s[i])
+
+        X = np.array(X_list)
+        y = np.array(y_list)
+
+        self._scaler = StandardScaler()
+        X_scaled = self._scaler.fit_transform(X)
+
+        self._model = SVR(kernel="rbf", C=100.0, epsilon=0.1)
+        self._model.fit(X_scaled, y)
+
+    def predict(self, history_df: pd.DataFrame, n_steps: int) -> np.ndarray:
+        if self._model is None or self._scaler is None:
+            return np.full(n_steps, self._fallback)
+        history = history_df.sort_values("year")["bank_distance"].dropna().tolist()
+        preds = []
+        for _ in range(n_steps):
+            x = self._make_features(history)
+            x_scaled = self._scaler.transform(x)
+            p = float(self._model.predict(x_scaled)[0])
+            preds.append(p)
+            history.append(p)
+        return np.array(preds)
+
+
+class GradientBoostingBaseline(BaseBaseline):
+    """
+    Sklearn Gradient Boosting Regressor with recursive multi-step forecasting.
+
+    Similar to XGBoost but uses sklearn's implementation. Provides a different
+    regularisation approach via shrinkage and subsampling.
+    """
+
+    name = "gradient_boosting"
+    _model: GradientBoostingRegressor | None = None
+    _n_lags: int = 3
+    _fallback: float = 0.0
+
+    def _make_features(self, values: list[float]) -> np.ndarray:
+        n = len(values)
+        lag1 = values[-1] if n >= 1 else 0.0
+        lag2 = values[-2] if n >= 2 else lag1
+        lag3 = values[-3] if n >= 3 else lag1
+        roc = (values[-1] - values[-2]) if n >= 2 else 0.0
+        roll3 = float(np.mean(values[-3:])) if n >= 3 else float(np.mean(values))
+        return np.array([[lag1, lag2, lag3, roc, roll3]])
+
+    def fit(self, series_df: pd.DataFrame) -> None:
+        s = series_df.sort_values("year")["bank_distance"].dropna().tolist()
+        if len(s) < self._n_lags + 2:
+            logger.warning("Not enough data for GBR baseline, using persistence fallback")
+            self._model = None
+            self._fallback = s[-1] if s else 0.0
+            return
+
+        X_list, y_list = [], []
+        for i in range(self._n_lags, len(s)):
+            X_list.append(self._make_features(s[:i]).flatten())
+            y_list.append(s[i])
+
+        self._model = GradientBoostingRegressor(
+            n_estimators=200, max_depth=5, learning_rate=0.1,
+            random_state=42,
+        )
+        self._model.fit(np.array(X_list), np.array(y_list))
+
+    def predict(self, history_df: pd.DataFrame, n_steps: int) -> np.ndarray:
+        if self._model is None:
+            return np.full(n_steps, self._fallback)
+        history = history_df.sort_values("year")["bank_distance"].dropna().tolist()
+        preds = []
+        for _ in range(n_steps):
+            x = self._make_features(history)
+            p = float(self._model.predict(x)[0])
+            preds.append(p)
+            history.append(p)
+        return np.array(preds)
+
+
+class ElasticNetBaseline(BaseBaseline):
+    """
+    Elastic Net regularised linear model with lag features.
+
+    Combines L1 and L2 penalties. Useful when features are correlated
+    (lags are inherently correlated). Scaled inputs for stable convergence.
+    """
+
+    name = "elastic_net"
+    _model: ElasticNet | None = None
+    _scaler: StandardScaler | None = None
+    _n_lags: int = 3
+    _fallback: float = 0.0
+
+    def _make_features(self, values: list[float]) -> np.ndarray:
+        n = len(values)
+        lag1 = values[-1] if n >= 1 else 0.0
+        lag2 = values[-2] if n >= 2 else lag1
+        lag3 = values[-3] if n >= 3 else lag1
+        roc = (values[-1] - values[-2]) if n >= 2 else 0.0
+        roll3 = float(np.mean(values[-3:])) if n >= 3 else float(np.mean(values))
+        return np.array([[lag1, lag2, lag3, roc, roll3]])
+
+    def fit(self, series_df: pd.DataFrame) -> None:
+        s = series_df.sort_values("year")["bank_distance"].dropna().tolist()
+        if len(s) < self._n_lags + 2:
+            logger.warning("Not enough data for ElasticNet baseline, using persistence fallback")
+            self._model = None
+            self._fallback = s[-1] if s else 0.0
+            return
+
+        X_list, y_list = [], []
+        for i in range(self._n_lags, len(s)):
+            X_list.append(self._make_features(s[:i]).flatten())
+            y_list.append(s[i])
+
+        X = np.array(X_list)
+        y = np.array(y_list)
+
+        self._scaler = StandardScaler()
+        X_scaled = self._scaler.fit_transform(X)
+
+        self._model = ElasticNet(alpha=0.1, l1_ratio=0.5, random_state=42, max_iter=5000)
+        self._model.fit(X_scaled, y)
+
+    def predict(self, history_df: pd.DataFrame, n_steps: int) -> np.ndarray:
+        if self._model is None or self._scaler is None:
+            return np.full(n_steps, self._fallback)
+        history = history_df.sort_values("year")["bank_distance"].dropna().tolist()
+        preds = []
+        for _ in range(n_steps):
+            x = self._make_features(history)
+            x_scaled = self._scaler.transform(x)
+            p = float(self._model.predict(x_scaled)[0])
+            preds.append(p)
+            history.append(p)
+        return np.array(preds)
+
+
+class KNNBaseline(BaseBaseline):
+    """
+    k-Nearest Neighbors regression with lag features.
+
+    Instance-based learning: predictions are weighted averages of the k
+    closest historical feature vectors. Adaptive k based on sample size.
+    """
+
+    name = "knn"
+    _model: KNeighborsRegressor | None = None
+    _scaler: StandardScaler | None = None
+    _n_lags: int = 3
+    _fallback: float = 0.0
+
+    def _make_features(self, values: list[float]) -> np.ndarray:
+        n = len(values)
+        lag1 = values[-1] if n >= 1 else 0.0
+        lag2 = values[-2] if n >= 2 else lag1
+        lag3 = values[-3] if n >= 3 else lag1
+        roc = (values[-1] - values[-2]) if n >= 2 else 0.0
+        roll3 = float(np.mean(values[-3:])) if n >= 3 else float(np.mean(values))
+        return np.array([[lag1, lag2, lag3, roc, roll3]])
+
+    def fit(self, series_df: pd.DataFrame) -> None:
+        s = series_df.sort_values("year")["bank_distance"].dropna().tolist()
+        if len(s) < self._n_lags + 2:
+            logger.warning("Not enough data for KNN baseline, using persistence fallback")
+            self._model = None
+            self._fallback = s[-1] if s else 0.0
+            return
+
+        X_list, y_list = [], []
+        for i in range(self._n_lags, len(s)):
+            X_list.append(self._make_features(s[:i]).flatten())
+            y_list.append(s[i])
+
+        X = np.array(X_list)
+        y = np.array(y_list)
+
+        self._scaler = StandardScaler()
+        X_scaled = self._scaler.fit_transform(X)
+
+        n_neighbors = min(5, len(X) - 1)
+        self._model = KNeighborsRegressor(n_neighbors=max(1, n_neighbors), weights="distance")
+        self._model.fit(X_scaled, y)
+
+    def predict(self, history_df: pd.DataFrame, n_steps: int) -> np.ndarray:
+        if self._model is None or self._scaler is None:
+            return np.full(n_steps, self._fallback)
+        history = history_df.sort_values("year")["bank_distance"].dropna().tolist()
+        preds = []
+        for _ in range(n_steps):
+            x = self._make_features(history)
+            x_scaled = self._scaler.transform(x)
+            p = float(self._model.predict(x_scaled)[0])
+            preds.append(p)
+            history.append(p)
+        return np.array(preds)
+
+
+# ── Model registry ───────────────────────────────────────────────────────────
+
+
+ALL_BASELINE_CLASSES: list[type[BaseBaseline]] = [
+    PersistenceBaseline,
+    LinearExtrapolationBaseline,
+    ARIMABaseline,
+    RandomForestBaseline,
+    ExponentialSmoothingBaseline,
+    XGBoostBaseline,
+    SVRBaseline,
+    GradientBoostingBaseline,
+    ElasticNetBaseline,
+    KNNBaseline,
+]
+
+BASELINE_NAME_MAP: dict[str, type[BaseBaseline]] = {
+    cls.name: cls for cls in ALL_BASELINE_CLASSES  # type: ignore[misc]
+}
+
+
 # ── Batch evaluation helper ───────────────────────────────────────────────────
 
 
@@ -295,19 +663,14 @@ def evaluate_all_baselines(
     val_end_year: int = 2015,
 ) -> pd.DataFrame:
     """
-    Run all 4 baselines on all 100 (reach, bank_side) series.
+    Run all 10 baselines on all 100 (reach, bank_side) series.
 
     Returns
     -------
     pd.DataFrame with one row per (model, reach_id, bank_side)
     and columns [model, reach_id, bank_side, NSE, RMSE, MAE, KGE]
     """
-    baselines: list[BaseBaseline] = [
-        PersistenceBaseline(),
-        LinearExtrapolationBaseline(),
-        ARIMABaseline(),
-        RandomForestBaseline(),
-    ]
+    baselines: list[BaseBaseline] = [cls() for cls in ALL_BASELINE_CLASSES]
     results = []
     series_groups = full_df.groupby(["reach_id", "bank_side"])
     total = len(series_groups)
