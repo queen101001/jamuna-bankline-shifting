@@ -1,20 +1,23 @@
 'use client';
 import { useQuery } from '@tanstack/react-query';
-import { getPredictionForYear } from '@/lib/api';
+import { getPredictionForYear, getBaselineYearPrediction } from '@/lib/api';
 import useAppStore from '@/store';
 import ReachCard from './ReachCard';
 import LoadingSpinner from '@/components/ui/LoadingSpinner';
 
 export default function ReachGrid() {
-  const selectedYear = useAppStore((s) => s.selectedYear);
+  const confirmedYear = useAppStore((s) => s.confirmedYear);
+  const activeAlgorithm = useAppStore((s) => s.activeAlgorithm);
 
-  const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['yearPrediction', selectedYear],
-    queryFn: () => getPredictionForYear(selectedYear),
-    placeholderData: (prev) => prev,
+  const { data, isLoading, isFetching, isError, error } = useQuery({
+    queryKey: ['yearPrediction', confirmedYear, activeAlgorithm],
+    queryFn: () =>
+      activeAlgorithm === 'tft'
+        ? getPredictionForYear(confirmedYear)
+        : getBaselineYearPrediction(confirmedYear, activeAlgorithm),
   });
 
-  if (isLoading) return <LoadingSpinner label={`Loading predictions for ${selectedYear}…`} />;
+  if (isLoading || isFetching) return <LoadingSpinner label={`Loading predictions for ${confirmedYear}…`} />;
 
   if (isError) {
     return (

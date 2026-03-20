@@ -1,14 +1,14 @@
 'use client';
-import { ChevronUp, ChevronDown } from 'lucide-react';
+import { ChevronUp, ChevronDown, Search } from 'lucide-react';
 import useAppStore from '@/store';
 import ForecastTypeTag from './ForecastTypeTag';
 
 const MIN_YEAR = 2021;
-const MAX_YEAR = 2099;
+const MAX_YEAR = 2100;
 const DIRECT_MAX = 2025;
 
 export default function YearSelector() {
-  const { selectedYear, setSelectedYear } = useAppStore();
+  const { selectedYear, confirmedYear, setSelectedYear, confirmYear } = useAppStore();
 
   function clamp(y) {
     return Math.max(MIN_YEAR, Math.min(MAX_YEAR, y));
@@ -21,10 +21,12 @@ export default function YearSelector() {
 
   function handleKey(e) {
     if (e.key === 'ArrowUp') setSelectedYear(clamp(selectedYear + 1));
-    if (e.key === 'ArrowDown') setSelectedYear(clamp(selectedYear - 1));
+    else if (e.key === 'ArrowDown') setSelectedYear(clamp(selectedYear - 1));
+    else if (e.key === 'Enter') confirmYear();
   }
 
   const forecastType = selectedYear <= DIRECT_MAX ? 'direct' : 'rolling';
+  const yearChanged = selectedYear !== confirmedYear;
 
   return (
     <div className="flex flex-col items-center gap-4">
@@ -35,37 +37,53 @@ export default function YearSelector() {
         >
           Forecast Year
         </p>
-        <div
-          className="flex items-center gap-3 px-5 py-3 rounded-2xl border"
-          style={{ background: 'var(--card)', borderColor: 'var(--border)' }}
-        >
-          <button
-            onClick={() => setSelectedYear(clamp(selectedYear - 1))}
-            className="p-1 rounded-md transition-colors hover:bg-white/10"
-            style={{ color: 'var(--text-dim)' }}
-            aria-label="Decrease year"
+        <div className="flex items-center gap-3">
+          <div
+            className="flex items-center gap-3 px-5 py-3 rounded-2xl border"
+            style={{ background: 'var(--card)', borderColor: 'var(--border)' }}
           >
-            <ChevronDown size={20} />
-          </button>
+            <button
+              onClick={() => setSelectedYear(clamp(selectedYear - 1))}
+              className="p-1 rounded-md transition-colors hover:bg-white/10"
+              style={{ color: 'var(--text-dim)' }}
+              aria-label="Decrease year"
+            >
+              <ChevronDown size={20} />
+            </button>
 
-          <input
-            type="number"
-            value={selectedYear}
-            onChange={handleInput}
-            onKeyDown={handleKey}
-            min={MIN_YEAR}
-            max={MAX_YEAR}
-            className="w-24 text-center text-4xl font-mono font-bold bg-transparent border-none outline-none"
-            style={{ color: 'var(--accent)', caretColor: 'var(--accent)' }}
-          />
+            <input
+              type="number"
+              value={selectedYear}
+              onChange={handleInput}
+              onKeyDown={handleKey}
+              min={MIN_YEAR}
+              max={MAX_YEAR}
+              className="w-24 text-center text-4xl font-mono font-bold bg-transparent border-none outline-none"
+              style={{ color: 'var(--accent)', caretColor: 'var(--accent)' }}
+            />
+
+            <button
+              onClick={() => setSelectedYear(clamp(selectedYear + 1))}
+              className="p-1 rounded-md transition-colors hover:bg-white/10"
+              style={{ color: 'var(--text-dim)' }}
+              aria-label="Increase year"
+            >
+              <ChevronUp size={20} />
+            </button>
+          </div>
 
           <button
-            onClick={() => setSelectedYear(clamp(selectedYear + 1))}
-            className="p-1 rounded-md transition-colors hover:bg-white/10"
-            style={{ color: 'var(--text-dim)' }}
-            aria-label="Increase year"
+            onClick={confirmYear}
+            className="flex items-center gap-2 px-5 py-3 rounded-2xl border font-medium text-sm transition-all"
+            style={{
+              background: yearChanged ? 'var(--accent)' : 'var(--card)',
+              borderColor: yearChanged ? 'var(--accent)' : 'var(--border)',
+              color: yearChanged ? '#0f172a' : 'var(--text-dim)',
+              transform: yearChanged ? 'scale(1.05)' : 'scale(1)',
+            }}
           >
-            <ChevronUp size={20} />
+            <Search size={16} />
+            Check
           </button>
         </div>
       </div>

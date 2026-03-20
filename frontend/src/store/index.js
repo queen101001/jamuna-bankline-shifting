@@ -3,10 +3,16 @@ import { create } from 'zustand';
 
 const useAppStore = create((set) => ({
   selectedYear: 2021,
+  confirmedYear: 2021,
   setSelectedYear: (year) => set({ selectedYear: year }),
+  confirmYear: () => set((s) => ({ confirmedYear: s.selectedYear })),
 
   selectedReach: null,
   setSelectedReach: (reach) => set({ selectedReach: reach }),
+
+  // Active algorithm for predictions (TFT or a baseline name)
+  activeAlgorithm: 'tft',
+  setActiveAlgorithm: (algo) => set({ activeAlgorithm: algo }),
 
   // Training drawer state
   trainingJobId: null,

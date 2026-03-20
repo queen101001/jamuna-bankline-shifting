@@ -1,5 +1,7 @@
 import YearSelector from '@/components/dashboard/YearSelector';
+import AlgorithmSelector from '@/components/ui/AlgorithmSelector';
 import ReachGrid from '@/components/dashboard/ReachGrid';
+import InfoButton from '@/components/ui/InfoButton';
 
 export default function DashboardPage() {
   return (
@@ -10,18 +12,21 @@ export default function DashboardPage() {
           Jamuna River Bankline Prediction
         </h1>
         <p className="text-sm max-w-xl mx-auto" style={{ color: 'var(--text-dim)' }}>
-          Select a forecast year to view predicted bankline positions for all 50 reaches.
+          Select a forecast year and algorithm to view predicted bankline positions for all 50 reaches.
           Left bank positive = erosion · Right bank negative = erosion.
         </p>
       </div>
 
-      {/* Year selector */}
-      <div className="flex justify-center mb-10">
+      {/* Year + Algorithm selectors */}
+      <div className="flex flex-wrap justify-center items-start gap-8 mb-10">
         <YearSelector />
+        <AlgorithmSelector />
       </div>
 
       {/* Reach grid */}
       <ReachGrid />
+
+      <InfoButton pageId="dashboard" />
     </div>
   );
 }
