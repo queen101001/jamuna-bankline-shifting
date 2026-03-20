@@ -13,26 +13,32 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 WORKDIR /app
 
 # Copy project definition first (layer caching)
-COPY pyproject.toml ./
+COPY pyproject.toml uv.lock* ./
 
-# Install dependencies via uv (uses lock file if present)
+# Install dependencies via uv
 RUN uv sync --no-dev --frozen || uv sync --no-dev
 
 # Copy source code and configs
 COPY src/ src/
 COPY configs/ configs/
 
-# Copy data and models (mount via volumes in production)
+# Copy data files
 COPY data/raw/ data/raw/
+COPY dataset/ dataset/
+
+# Copy pre-trained models and prediction cache
+COPY models/tft/last.ckpt models/tft/last.ckpt
+COPY models/baselines/ models/baselines/
+COPY models/predictions_cache.json models/predictions_cache.json
 
 # Create output directories
-RUN mkdir -p data/processed models/tft mlruns
+RUN mkdir -p data/processed mlruns logs
 
 EXPOSE 8000
 
 # Healthcheck
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # Default: run API server
-CMD ["uv", "run", "python", "-m", "src.serving.api"]
+CMD ["uv", "run", "uvicorn", "src.serving.api:app", "--host", "0.0.0.0", "--port", "8000"]
