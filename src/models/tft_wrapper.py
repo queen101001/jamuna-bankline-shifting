@@ -80,6 +80,7 @@ def build_tft_model(
         log_interval=-1,
         reduce_on_plateau_patience=tr_cfg.reduce_lr_patience,
         log_val_interval=-1,
+        weight_decay=tft_cfg.weight_decay,
     )
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -118,9 +119,14 @@ def load_best_checkpoint(
         )
 
     def _extract_val_loss(path: Path) -> float:
+        """Extract loss from checkpoint filename (supports val_loss and train_loss)."""
         try:
-            part = path.stem.split("val_loss=")[-1]
-            return float(part)
+            stem = path.stem
+            for key in ("val_loss=", "train_loss_epoch=", "train_loss="):
+                if key in stem:
+                    part = stem.split(key)[-1]
+                    return float(part)
+            return float("inf")
         except (IndexError, ValueError):
             return float("inf")
 

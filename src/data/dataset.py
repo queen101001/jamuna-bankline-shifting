@@ -32,14 +32,13 @@ from torch.utils.data import DataLoader
 
 from src.config import Settings, get_settings
 
-# Features that are observed but not known in the future
+# Features that are observed but not known in the future.
+# Reduced to 3 essential features to prevent overfitting on limited data.
+# Removed erosion_rate, rate_of_change, net_channel_erosion (noisy YoY deltas).
 _TIME_VARYING_UNKNOWN_REALS = [
     "bank_distance",
     "erosion_indicator",   # unified: positive = erosion regardless of bank side
-    "erosion_rate",        # YoY change in erosion_indicator
-    "rate_of_change",      # raw YoY change in bank_distance (bank-sign preserved)
     "rolling_mean_3",
-    "net_channel_erosion", # left - right: positive = both banks eroding
 ]
 
 # Static categorical features (per-series, time-invariant)
@@ -121,7 +120,7 @@ def make_dataloaders(
     train_df: pd.DataFrame,
     val_df: pd.DataFrame,
     settings: Settings | None = None,
-) -> tuple[TimeSeriesDataSet, DataLoader, DataLoader]:
+) -> tuple[TimeSeriesDataSet, DataLoader, DataLoader | None]:
     """
     Build train TimeSeriesDataSet and derive val dataset from it.
 
@@ -129,6 +128,8 @@ def make_dataloaders(
     to share the GroupNormalizer fitted on training data.
     Creating a fresh val dataset would re-fit the normalizer on val data,
     causing data leakage.
+
+    If val_df is empty (all data used for training), val_loader is None.
 
     Returns
     -------
@@ -144,8 +145,19 @@ def make_dataloaders(
 
     train_dataset = build_tft_dataset(train_df, settings)
 
+    train_loader = train_dataset.to_dataloader(
+        train=True,
+        batch_size=tft.batch_size,
+        num_workers=tr.num_workers,
+        drop_last=False,
+    )
+
+    # If val_df is empty, skip val dataset/loader
+    if val_df.empty:
+        return train_dataset, train_loader, None
+
     # Val dataset must include the training rows as encoder context.
-    # With only 4 val years but encoder_length=10, val_df alone is too short
+    # With only a few val years but encoder_length=N, val_df alone is too short
     # to form any valid windows. Combining gives the model its full context.
     train_val_df = pd_local.concat([train_df, val_df], ignore_index=True)
     for col in _STATIC_CATEGORICALS:
@@ -158,12 +170,6 @@ def make_dataloaders(
         stop_randomization=True,
     )
 
-    train_loader = train_dataset.to_dataloader(
-        train=True,
-        batch_size=tft.batch_size,
-        num_workers=tr.num_workers,
-        drop_last=False,
-    )
     val_loader = val_dataset.to_dataloader(
         train=False,
         batch_size=tft.batch_size * 2,

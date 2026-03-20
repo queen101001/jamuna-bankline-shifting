@@ -41,22 +41,22 @@ def objective(trial: optuna.Trial, settings: Settings) -> float:
     is retrained from scratch with the best params at full max_epochs.
     """
     overrides: dict[str, object] = {
-        "tft.hidden_size": trial.suggest_categorical("hidden_size", [32, 64, 128, 256]),
+        "tft.hidden_size": trial.suggest_categorical("hidden_size", [8, 16, 32, 64]),
         "tft.attention_head_size": trial.suggest_categorical(
-            "attention_head_size", [1, 2, 4]
+            "attention_head_size", [1, 2]
         ),
-        "tft.dropout": trial.suggest_float("dropout", 0.05, 0.3),
+        "tft.dropout": trial.suggest_float("dropout", 0.1, 0.5),
         "tft.hidden_continuous_size": trial.suggest_categorical(
-            "hidden_continuous_size", [8, 16, 32, 64]
+            "hidden_continuous_size", [4, 8, 16]
         ),
-        "tft.lstm_layers": trial.suggest_int("lstm_layers", 1, 3),
-        "tft.learning_rate": trial.suggest_float("learning_rate", 1e-5, 1e-2, log=True),
+        "tft.lstm_layers": trial.suggest_int("lstm_layers", 1, 2),
+        "tft.learning_rate": trial.suggest_float("learning_rate", 1e-4, 0.1, log=True),
         "tft.gradient_clip_val": trial.suggest_float(
-            "gradient_clip_val", 0.01, 1.0, log=True
+            "gradient_clip_val", 0.1, 2.0, log=True
         ),
-        "tft.batch_size": trial.suggest_categorical("batch_size", [32, 64, 128]),
-        # Reduce epochs for search speed; EarlyStopping handles termination
-        "tft.max_epochs": 30,
+        "tft.batch_size": trial.suggest_categorical("batch_size", [8, 16, 32]),
+        # Reduce epochs for search speed
+        "tft.max_epochs": 50,
     }
 
     try:

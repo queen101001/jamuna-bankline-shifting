@@ -6,8 +6,12 @@ Entry point: train_tft() — called directly or from tune.py for each Optuna tri
 
 from __future__ import annotations
 
+import src  # Applies torch.load patch (must be before other imports)
+
 import os
 from pathlib import Path
+
+import torch
 
 import mlflow
 import mlflow.pytorch
@@ -74,33 +78,67 @@ def train_tft(
     raw_df = load_long_dataframe(settings)
     df = run_preprocessing_pipeline(raw_df, settings)
     train_df, val_df, _ = temporal_split(df, settings)
+
+    has_val = len(val_df) > 0
     train_dataset, train_loader, val_loader = make_dataloaders(train_df, val_df, settings)
+    if not has_val:
+        logger.info("No validation split — training on all data")
 
     # ── Model ─────────────────────────────────────────────────────────────────
     logger.info("Building TFT model...")
     model = build_tft_model(train_dataset, settings)
 
+    # When no validation set, patch the LR scheduler to monitor train_loss_epoch
+    # instead of val_loss (which doesn't exist without a val split).
+    if not has_val:
+        _original_configure_optimizers = model.configure_optimizers
+
+        def _patched_configure_optimizers():
+            result = _original_configure_optimizers()
+            if "lr_scheduler" in result and isinstance(result["lr_scheduler"], dict):
+                result["lr_scheduler"]["monitor"] = "train_loss_epoch"
+            return result
+
+        model.configure_optimizers = _patched_configure_optimizers
+
     # ── Callbacks ────────────────────────────────────────────────────────────
     ckpt_dir = settings.tft_checkpoints_dir()
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
-    callbacks = [
-        EarlyStopping(
-            monitor="val_loss",
-            patience=settings.training.early_stopping_patience,
-            mode="min",
-            verbose=True,
-        ),
-        ModelCheckpoint(
-            dirpath=str(ckpt_dir),
-            filename="tft-{epoch:02d}-val_loss={val_loss:.4f}",
-            monitor="val_loss",
-            mode="min",
-            save_top_k=3,
-            save_last=True,
-        ),
-        LearningRateMonitor(logging_interval="epoch"),
-    ]
+    callbacks = []
+
+    if has_val:
+        callbacks.append(
+            EarlyStopping(
+                monitor="val_loss",
+                patience=settings.training.early_stopping_patience,
+                mode="min",
+                verbose=True,
+            )
+        )
+        callbacks.append(
+            ModelCheckpoint(
+                dirpath=str(ckpt_dir),
+                filename="tft-{epoch:02d}-val_loss={val_loss:.4f}",
+                monitor="val_loss",
+                mode="min",
+                save_top_k=3,
+                save_last=True,
+            )
+        )
+    else:
+        callbacks.append(
+            ModelCheckpoint(
+                dirpath=str(ckpt_dir),
+                filename="tft-{epoch:02d}-train_loss={train_loss_epoch:.4f}",
+                monitor="train_loss_epoch",
+                mode="min",
+                save_top_k=3,
+                save_last=True,
+            )
+        )
+
+    callbacks.append(LearningRateMonitor(logging_interval="epoch"))
 
     # ── MLflow setup ──────────────────────────────────────────────────────────
     mlflow.set_tracking_uri(settings.mlflow.tracking_uri)
@@ -125,6 +163,32 @@ def train_tft(
         log_every_n_steps=1,
     )
 
+    # ── Learning rate finder ──────────────────────────────────────────────
+    # Use a separate loader with num_workers=0 to avoid deadlock when running
+    # inside a ThreadPoolExecutor (background training from the API).
+    try:
+        from lightning.pytorch.tuner import Tuner
+
+        lr_loader = train_dataset.to_dataloader(
+            train=True, batch_size=settings.tft.batch_size, num_workers=0, drop_last=False,
+        )
+        tuner = Tuner(trainer)
+        lr_finder = tuner.lr_find(
+            model,
+            train_dataloaders=lr_loader,
+            min_lr=1e-5,
+            max_lr=1.0,
+            num_training=100,
+        )
+        optimal_lr = lr_finder.suggestion()
+        if optimal_lr is not None:
+            logger.info(f"LR finder suggests: {optimal_lr:.6f}")
+            model.hparams.learning_rate = optimal_lr
+        else:
+            logger.warning("LR finder returned None, using config learning_rate")
+    except Exception as e:
+        logger.warning(f"LR finder failed ({e}), using config learning_rate")
+
     # ── Training ──────────────────────────────────────────────────────────────
     logger.info("Starting training...")
     with mlflow.start_run(
@@ -133,11 +197,11 @@ def train_tft(
     ) as run:
         _log_settings_to_mlflow(settings)
 
-        trainer.fit(
-            model,
-            train_dataloaders=train_loader,
-            val_dataloaders=val_loader,
-        )
+        fit_kwargs: dict = {"train_dataloaders": train_loader}
+        if val_loader is not None:
+            fit_kwargs["val_dataloaders"] = val_loader
+
+        trainer.fit(model, **fit_kwargs)
 
         # Log best checkpoint
         best_ckpt = trainer.checkpoint_callback.best_model_path
@@ -146,11 +210,12 @@ def train_tft(
         if best_ckpt:
             mlflow.log_artifact(best_ckpt, artifact_path="checkpoints")
 
+        metric_name = "best_val_loss" if has_val else "best_train_loss"
         if best_score is not None:
-            mlflow.log_metric("best_val_loss", float(best_score))
+            mlflow.log_metric(metric_name, float(best_score))
 
         logger.info(
-            f"Training complete | best_val_loss={float(best_score):.4f} | "
+            f"Training complete | {metric_name}={float(best_score):.4f} | "
             f"checkpoint={Path(best_ckpt).name if best_ckpt else 'none'}"
         )
 
