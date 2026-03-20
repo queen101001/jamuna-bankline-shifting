@@ -1,6 +1,6 @@
 'use client';
 import { useCallback, useRef, useState } from 'react';
-import { Upload, FileSpreadsheet } from 'lucide-react';
+import { Upload, FileSpreadsheet, ChevronDown, ChevronUp } from 'lucide-react';
 import parseValidationExcel from '@/lib/parseValidationExcel';
 import useAppStore from '@/store';
 
@@ -9,6 +9,7 @@ export default function ExcelUploader() {
   const [dragOver, setDragOver] = useState(false);
   const [error, setError] = useState(null);
   const [parsing, setParsing] = useState(false);
+  const [showGuide, setShowGuide] = useState(false);
   const inputRef = useRef(null);
 
   const handleFile = useCallback(
@@ -108,6 +109,74 @@ export default function ExcelUploader() {
           {error}
         </p>
       )}
+
+      {/* Formatting guide */}
+      <div className="w-full max-w-lg">
+        <button
+          onClick={() => setShowGuide((v) => !v)}
+          className="flex items-center gap-1.5 text-xs font-medium transition-colors"
+          style={{ color: 'var(--text-dim)' }}
+        >
+          {showGuide ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          Required Excel format
+        </button>
+        {showGuide && (
+          <div
+            className="mt-2 rounded-xl border p-4 text-xs space-y-3"
+            style={{ background: 'var(--card)', borderColor: 'var(--border)', color: 'var(--text-dim)' }}
+          >
+            <p style={{ color: 'var(--text)' }}>
+              Your .xlsx file must use a <strong>2-row hierarchical header</strong> matching the training data format:
+            </p>
+            <div className="overflow-x-auto">
+              <table className="font-mono text-xs border-collapse" style={{ borderColor: 'var(--border)' }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                    <th className="px-2 py-1 text-left" style={{ color: 'var(--muted)' }}>Row</th>
+                    <th className="px-2 py-1 text-left">Col A</th>
+                    <th className="px-2 py-1 text-left">Col B</th>
+                    <th className="px-2 py-1 text-left">Col C</th>
+                    <th className="px-2 py-1 text-left">Col D</th>
+                    <th className="px-2 py-1 text-left">Col E</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                    <td className="px-2 py-1" style={{ color: 'var(--muted)' }}>1</td>
+                    <td className="px-2 py-1" style={{ color: 'var(--accent)' }}>Reaches</td>
+                    <td className="px-2 py-1" style={{ color: 'var(--accent)' }}>Distance(2021)</td>
+                    <td className="px-2 py-1" style={{ color: 'var(--accent)' }}></td>
+                    <td className="px-2 py-1" style={{ color: 'var(--accent)' }}>Distance(2022)</td>
+                    <td className="px-2 py-1" style={{ color: 'var(--accent)' }}>...</td>
+                  </tr>
+                  <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                    <td className="px-2 py-1" style={{ color: 'var(--muted)' }}>2</td>
+                    <td className="px-2 py-1"></td>
+                    <td className="px-2 py-1">Right Bank (m)</td>
+                    <td className="px-2 py-1">Left Bank (m)</td>
+                    <td className="px-2 py-1">Right Bank (m)</td>
+                    <td className="px-2 py-1">...</td>
+                  </tr>
+                  <tr>
+                    <td className="px-2 py-1" style={{ color: 'var(--muted)' }}>3+</td>
+                    <td className="px-2 py-1">1</td>
+                    <td className="px-2 py-1">1234.5</td>
+                    <td className="px-2 py-1">5678.9</td>
+                    <td className="px-2 py-1">1230.2</td>
+                    <td className="px-2 py-1">...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <ul className="space-y-1 pl-4 list-disc" style={{ color: 'var(--text-dim)' }}>
+              <li><strong>Row 1</strong>: "Reaches" in col A, then "Distance(YYYY)" for each year (2021-2025)</li>
+              <li><strong>Row 2</strong>: Empty col A, then alternating "Right Bank (m)" / "Left Bank (m)" sub-headers</li>
+              <li><strong>Row 3+</strong>: Reach number (1-50) in col A, followed by bank distance values in meters</li>
+              <li>Sign convention: Left bank positive = erosion, Right bank negative = erosion</li>
+            </ul>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
