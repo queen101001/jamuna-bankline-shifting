@@ -24,6 +24,7 @@ import json
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from io import BytesIO
 from pathlib import Path
 from typing import Annotated
 
@@ -34,6 +35,7 @@ import pandas as pd
 import torch
 from fastapi import FastAPI, HTTPException, Path as PathParam, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from loguru import logger
 from pytorch_forecasting import TemporalFusionTransformer
 
@@ -822,6 +824,166 @@ def get_series(
         series_id=get_series_id(reach_id, bank_side),
         observations=observations,
         latest_forecast=latest_forecast,
+    )
+
+
+# ── Historical data endpoint ─────────────────────────────────────────────────
+
+
+@app.get("/data/year/{year}", response_model=YearPredictionResponse, tags=["Data"])
+def get_historical_year(
+    year: Annotated[int, PathParam(description="Observed calendar year")],
+) -> YearPredictionResponse:
+    """
+    Return observed bank distances for all 100 series at a given historical year.
+
+    Only years present in the dataset are valid (27 non-contiguous years, 1991–2020).
+    Returns 404 with the list of available years if the requested year has no data.
+    """
+    _require_data()
+    assert state.df_full is not None
+    assert state.settings is not None
+
+    observed_years = state.settings.data.observed_years
+    if year not in observed_years:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Year {year} is not in the observed dataset. Available years: {observed_years}",
+        )
+
+    year_data = state.df_full[state.df_full["year"] == year]
+    predictions = [
+        YearPointForecast(
+            reach_id=int(row["reach_id"]),
+            bank_side=row["bank_side"],
+            series_id=get_series_id(int(row["reach_id"]), row["bank_side"]),
+            q50=float(row["bank_distance"]),
+            q10=None,
+            q90=None,
+        )
+        for _, row in year_data.iterrows()
+    ]
+
+    return YearPredictionResponse(
+        year=year,
+        last_observed_year=year,
+        n_steps=0,
+        n_points=len(predictions),
+        forecast_type="historical",
+        accuracy_warning=None,
+        source="observed",
+        predictions=predictions,
+    )
+
+
+# ── Export endpoint ──────────────────────────────────────────────────────────
+
+
+@app.get("/export/predictions", tags=["Export"])
+def export_predictions(
+    start_year: int = Query(..., ge=2021, le=2100, description="Start year (inclusive)"),
+    end_year: int = Query(..., ge=2021, le=2100, description="End year (inclusive)"),
+    algorithm: str = Query(default="tft", description="Algorithm: 'tft' or any baseline name"),
+) -> StreamingResponse:
+    """
+    Export predicted bankline positions as an Excel file matching the original
+    2-row header format (Reaches × Distance(Year) × Right/Left Bank).
+
+    Left bank values are multiplied by -1 to match the raw Excel sign convention.
+    """
+    _require_data()
+    assert state.df_full is not None
+    assert state.settings is not None
+
+    if start_year > end_year:
+        raise HTTPException(status_code=400, detail="start_year must be <= end_year")
+    if algorithm != "tft" and algorithm not in BASELINE_NAME_MAP:
+        raise HTTPException(status_code=400, detail=f"Unknown algorithm: {algorithm}")
+
+    years = list(range(start_year, end_year + 1))
+    # predictions_lookup: (year, reach_id, bank_side) → q50 value
+    predictions_lookup: dict[tuple[int, int, str], float] = {}
+
+    if algorithm == "tft":
+        for yr in years:
+            cached = state.predictions_cache.get(yr)
+            if cached is None:
+                continue
+            for p in cached["predictions"]:
+                predictions_lookup[(yr, p["reach_id"], p["bank_side"])] = p["q50"]
+    else:
+        # Compute baseline predictions: one pass per series for max horizon
+        last_observed_year = int(state.df_full["year"].max())
+        max_steps = end_year - last_observed_year
+        splits = state.settings.data.splits
+        series_groups = state.df_full.groupby(["reach_id", "bank_side"])
+
+        for (reach_id, bank_side), group in series_groups:
+            series = group.sort_values("year")
+            train_series = series[series["year"] <= splits.train_end_year]
+
+            key = f"{reach_id}_{bank_side}"
+            pretrained = state.baseline_models.get(algorithm, {}).get(key)
+            if pretrained is not None:
+                baseline = pretrained
+            else:
+                baseline = BASELINE_NAME_MAP[algorithm]()
+                try:
+                    baseline.fit(train_series)
+                except Exception:
+                    continue
+
+            try:
+                preds = baseline.predict(train_series, n_steps=max_steps)
+            except Exception:
+                continue
+
+            for yr in years:
+                step_idx = yr - last_observed_year - 1
+                if 0 <= step_idx < len(preds):
+                    predictions_lookup[(yr, int(reach_id), bank_side)] = float(preds[step_idx])
+
+    # Build Excel with openpyxl
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Predictions"
+
+    # Row 1: "Reaches" + merged "Distance(YYYY)" headers
+    ws.cell(row=1, column=1, value="Reaches")
+    col = 2
+    for yr in years:
+        ws.merge_cells(start_row=1, start_column=col, end_row=1, end_column=col + 1)
+        ws.cell(row=1, column=col, value=f"Distance({yr})")
+        # Row 2: bank sub-headers
+        ws.cell(row=2, column=col, value="Right Bank (m)")
+        ws.cell(row=2, column=col + 1, value="Left Bank (m)")
+        col += 2
+
+    # Data rows (3–52): one row per reach
+    for reach_id in range(1, 51):
+        row = reach_id + 2
+        ws.cell(row=row, column=1, value=reach_id)
+        col = 2
+        for yr in years:
+            right_val = predictions_lookup.get((yr, reach_id, "right"))
+            left_val = predictions_lookup.get((yr, reach_id, "left"))
+            if right_val is not None:
+                ws.cell(row=row, column=col, value=right_val)
+            if left_val is not None:
+                ws.cell(row=row, column=col + 1, value=-left_val)  # sign reversal
+            col += 2
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    filename = f"jamuna_predictions_{algorithm}_{start_year}-{end_year}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

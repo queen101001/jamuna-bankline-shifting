@@ -71,3 +71,17 @@ export function getBaselineYearPrediction(year, modelName) {
 export function getEvaluateCompare() {
   return request('/evaluate/compare');
 }
+
+export function getHistoricalYear(year) {
+  return request(`/data/year/${year}`);
+}
+
+export async function exportPredictions(startYear, endYear, algorithm = 'tft') {
+  const url = `${BASE_URL}/export/predictions?start_year=${startYear}&end_year=${endYear}&algorithm=${encodeURIComponent(algorithm)}`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'Export failed');
+  }
+  return res.blob();
+}

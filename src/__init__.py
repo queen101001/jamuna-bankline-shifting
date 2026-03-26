@@ -19,6 +19,10 @@ _orig_torch_load = torch.serialization.load  # Patch the canonical source
 def _patched_torch_load(*args, **kwargs):
     # Force weights_only=False to allow unpickling complex objects.
     kwargs["weights_only"] = False
+    # Force CPU loading when CUDA is not available to prevent errors
+    # from checkpoints trained on GPU.
+    if not torch.cuda.is_available():
+        kwargs["map_location"] = "cpu"
     return _orig_torch_load(*args, **kwargs)
 
 

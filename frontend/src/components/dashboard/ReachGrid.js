@@ -1,6 +1,6 @@
 'use client';
 import { useQuery } from '@tanstack/react-query';
-import { getPredictionForYear, getBaselineYearPrediction } from '@/lib/api';
+import { getPredictionForYear, getBaselineYearPrediction, getHistoricalYear } from '@/lib/api';
 import useAppStore from '@/store';
 import ReachCard from './ReachCard';
 import LoadingSpinner from '@/components/ui/LoadingSpinner';
@@ -9,12 +9,15 @@ export default function ReachGrid() {
   const confirmedYear = useAppStore((s) => s.confirmedYear);
   const activeAlgorithm = useAppStore((s) => s.activeAlgorithm);
 
+  const isHistorical = confirmedYear <= 2020;
+
   const { data, isLoading, isFetching, isError, error } = useQuery({
-    queryKey: ['yearPrediction', confirmedYear, activeAlgorithm],
-    queryFn: () =>
-      activeAlgorithm === 'tft'
-        ? getPredictionForYear(confirmedYear)
-        : getBaselineYearPrediction(confirmedYear, activeAlgorithm),
+    queryKey: ['yearPrediction', confirmedYear, isHistorical ? 'historical' : activeAlgorithm],
+    queryFn: () => {
+      if (isHistorical) return getHistoricalYear(confirmedYear);
+      if (activeAlgorithm === 'tft') return getPredictionForYear(confirmedYear);
+      return getBaselineYearPrediction(confirmedYear, activeAlgorithm);
+    },
   });
 
   if (isLoading || isFetching) return <LoadingSpinner label={`Loading predictions for ${confirmedYear}…`} />;
@@ -54,7 +57,10 @@ export default function ReachGrid() {
           {data.n_points} predictions · {data.n_points / 2} reaches
         </p>
         <p className="text-sm font-mono" style={{ color: 'var(--muted)' }}>
-          {data.n_steps} step{data.n_steps !== 1 ? 's' : ''} from {data.last_observed_year}
+          {data.n_steps === 0
+            ? 'Observed data'
+            : `${data.n_steps} step${data.n_steps !== 1 ? 's' : ''} from ${data.last_observed_year}`
+          }
         </p>
       </div>
 

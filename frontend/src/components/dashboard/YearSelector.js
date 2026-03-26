@@ -3,8 +3,9 @@ import { ChevronUp, ChevronDown, Search } from 'lucide-react';
 import useAppStore from '@/store';
 import ForecastTypeTag from './ForecastTypeTag';
 
-const MIN_YEAR = 2021;
+const MIN_YEAR = 1991;
 const MAX_YEAR = 2100;
+const OBSERVED_MAX = 2020;
 const DIRECT_MAX = 2025;
 
 export default function YearSelector() {
@@ -25,7 +26,10 @@ export default function YearSelector() {
     else if (e.key === 'Enter') confirmYear();
   }
 
-  const forecastType = selectedYear <= DIRECT_MAX ? 'direct' : 'rolling';
+  const forecastType =
+    selectedYear <= OBSERVED_MAX ? 'historical'
+    : selectedYear <= DIRECT_MAX ? 'direct'
+    : 'rolling';
   const yearChanged = selectedYear !== confirmedYear;
 
   return (
@@ -35,7 +39,7 @@ export default function YearSelector() {
           className="text-xs font-medium uppercase tracking-widest text-center mb-2"
           style={{ color: 'var(--muted)' }}
         >
-          Forecast Year
+          {selectedYear <= OBSERVED_MAX ? 'Historical Year' : 'Forecast Year'}
         </p>
         <div className="flex items-center gap-3">
           <div
@@ -90,6 +94,11 @@ export default function YearSelector() {
 
       <ForecastTypeTag forecastType={forecastType} />
 
+      {forecastType === 'historical' && (
+        <p className="text-xs text-center max-w-sm" style={{ color: 'var(--muted)' }}>
+          Viewing observed bankline positions from the training dataset.
+        </p>
+      )}
       {forecastType === 'rolling' && (
         <p className="text-xs text-center max-w-sm" style={{ color: 'var(--muted)' }}>
           Predictions beyond 2025 use iterative rolling forecasts. Uncertainty intervals widen with distance from 2020.

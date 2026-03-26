@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install:*)",
+      "Bash(where pnpm:*)",
+      "Bash(python -m uv --version)"
+    ]
+  }
+}

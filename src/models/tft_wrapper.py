@@ -150,9 +150,35 @@ def load_tft_from_checkpoint(
     checkpoint_path : path to .ckpt file
     map_location    : torch device ('cpu', 'cuda', 'cuda:0', etc.)
     """
+    # Force CPU if CUDA is not available (checkpoint may have been trained on GPU)
+    if not torch.cuda.is_available():
+        map_location = "cpu"
+
+        # Pre-fix checkpoint: torchmetrics objects in __special_save__ may carry
+        # CUDA device references that survive map_location tensor remapping.
+        # Reset their device before Lightning tries model.to(device).
+        checkpoint = torch.load(checkpoint_path, map_location=map_location)
+        special = checkpoint.get("__special_save__", {})
+        for obj in special.values():
+            if hasattr(obj, "to"):
+                try:
+                    obj.to("cpu")
+                except Exception:
+                    pass
+            # Also recurse into ModuleList/Sequential children
+            if hasattr(obj, "modules"):
+                for m in obj.modules():
+                    if hasattr(m, "_device"):
+                        m._device = torch.device("cpu")
+        # Re-save the fixed checkpoint to a temp file
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".ckpt", delete=False) as tmp:
+            torch.save(checkpoint, tmp.name)
+            checkpoint_path = tmp.name
+
     model = TemporalFusionTransformer.load_from_checkpoint(
         checkpoint_path,
-        map_location=map_location,
+        map_location=torch.device(map_location),
     )
     model.eval()
     logger.info(f"TFT loaded from {Path(checkpoint_path).name}")

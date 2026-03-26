@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python start.py)",
+      "Bash(where uv:*)",
+      "Bash(python -c \"import shutil; print\\(shutil.which\\(''uv''\\)\\)\")",
+      "Bash(where node:*)",
+      "Bash(where npm:*)",
+      "Bash(python -c \"import importlib.util; spec = importlib.util.find_spec\\(''uv''\\); print\\(spec.origin if spec else ''not found''\\)\")",
+      "Read(//c/Users/u2010/AppData/Roaming/Python/Python314/Scripts/**)",
+      "Bash(export PATH=\"$PATH:C:/Users/u2010/AppData/Roaming/Python/Python314/Scripts\")",
+      "Bash(uv --version)",
+      "Bash(export PATH=\"$PATH:/c/Users/u2010/AppData/Roaming/Python/Python314/Scripts\")",
+      "Bash(npm --version)",
+      "Bash(npm install:*)",
+      "Bash(pnpm --version)",
+      "Bash(echo $PATH)",
+      "Bash(python -c \"import os; print\\(os.environ.get\\(''''PATH'''',''''''''\\)\\)\")",
+      "Bash(tr ';' '\\\\n')",
+      "Read(//c/Users/u2010/AppData/Roaming/npm/**)",
+      "Bash(python -c \":*)",
+      "Bash(.venv/Scripts/python -c \"import lightning; print\\(lightning.__version__\\)\")",
+      "Bash(.venv/Scripts/python -c \":*)",
+      "Bash(uv run python -c \":*)",
+      "Bash(npx skills:*)"
+    ]
+  }
+}
