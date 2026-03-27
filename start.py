@@ -8,9 +8,9 @@ Usage:
 
 What it does:
   1. Checks whether backend Python deps are installed (.venv)
-     → Runs `uv sync` if not.
+     -> Runs `uv sync` if not.
   2. Checks whether frontend Node deps are installed (frontend/node_modules)
-     → Runs `pnpm install` inside frontend/ if not.
+     -> Runs `pnpm install` inside frontend/ if not.
   3. Starts FastAPI backend on :8000
   4. Starts Next.js dev server on :3000
   5. Waits; kills both on Ctrl-C.
@@ -26,7 +26,7 @@ import sys
 import time
 from pathlib import Path
 
-# ── Colours (disabled on Windows unless ANSI is supported) ───────────────────
+# -- Colours (disabled on Windows unless ANSI is supported) -------------------
 _USE_COLOR = sys.stdout.isatty() and (os.name != "nt" or os.environ.get("TERM"))
 
 def _c(code: str, text: str) -> str:
@@ -44,7 +44,25 @@ VENV = ROOT / ".venv"
 
 IS_WIN = os.name == "nt"
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# -- Ensure common tool directories are on PATH (Windows) ---------------------
+if IS_WIN:
+    _extra_paths = [
+        Path.home() / "AppData" / "Roaming" / "npm",          # pnpm, npm globals
+        Path.home() / "AppData" / "Local" / "Microsoft" / "WinGet" / "Links",  # winget shims
+        Path(os.environ.get("PROGRAMFILES", r"C:\Program Files")) / "nodejs",  # Node.js
+    ]
+    # nvm for Windows symlink
+    _nvm_symlink = os.environ.get("NVM_SYMLINK")
+    if _nvm_symlink:
+        _extra_paths.append(Path(_nvm_symlink))
+    # Also add Python user-scripts directories (e.g. uv installed via pip --user)
+    for d in Path(Path.home() / "AppData" / "Roaming" / "Python").glob("Python*/Scripts"):
+        _extra_paths.append(d)
+    for p in _extra_paths:
+        if p.exists() and str(p) not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = os.environ.get("PATH", "") + os.pathsep + str(p)
+
+# -- Helpers -------------------------------------------------------------------
 
 def _run(cmd: list[str], cwd: Path = ROOT, check: bool = True) -> None:
     """Run a command, streaming output, raising on failure."""
@@ -56,7 +74,24 @@ def _run(cmd: list[str], cwd: Path = ROOT, check: bool = True) -> None:
 
 
 def _cmd_exists(name: str) -> bool:
-    return shutil.which(name) is not None
+    # On Windows, also check for .cmd/.exe variants
+    if shutil.which(name) is not None:
+        return True
+    if IS_WIN:
+        for ext in (".cmd", ".exe", ".bat"):
+            if shutil.which(name + ext) is not None:
+                return True
+    return False
+
+
+def _pnpm_cmd() -> str:
+    """Return the correct pnpm executable name for this platform."""
+    if IS_WIN:
+        if shutil.which("pnpm.cmd"):
+            return "pnpm.cmd"
+        if shutil.which("pnpm.exe"):
+            return "pnpm.exe"
+    return "pnpm"
 
 
 def _venv_has_package(pkg: str) -> bool:
@@ -79,7 +114,7 @@ def _node_modules_ok() -> bool:
     return nm.exists() and (nm / ".package-lock.json").exists() or (nm / ".modules.yaml").exists()
 
 
-# ── Backend dep check ─────────────────────────────────────────────────────────
+# -- Backend dep check ---------------------------------------------------------
 
 REQUIRED_PYTHON = "3.12"
 
@@ -95,7 +130,7 @@ def ensure_python_312() -> None:
     if result.returncode == 0:
         ok(f"Python {REQUIRED_PYTHON} found: {result.stdout.strip()}")
         return
-    warn(f"Python {REQUIRED_PYTHON} not found. Installing via uv…")
+    warn(f"Python {REQUIRED_PYTHON} not found. Installing via uv...")
     _run(["uv", "python", "install", REQUIRED_PYTHON], cwd=ROOT)
     ok(f"Python {REQUIRED_PYTHON} installed")
 
@@ -115,15 +150,15 @@ def ensure_backend_deps() -> None:
     ensure_python_312()
 
     if _venv_has_package("fastapi") or _venv_has_package("pydantic"):
-        ok("Python venv already set up — skipping install")
+        ok("Python venv already set up -- skipping install")
         return
 
-    warn("Python dependencies not found. Running `uv sync` (this may take a while)…")
+    warn("Python dependencies not found. Running `uv sync` (this may take a while)...")
     _run(["uv", "sync"], cwd=ROOT)
     ok("Backend dependencies installed")
 
 
-# ── Frontend dep check ────────────────────────────────────────────────────────
+# -- Frontend dep check --------------------------------------------------------
 
 def ensure_frontend_deps() -> None:
     head("Frontend dependencies")
@@ -140,15 +175,15 @@ def ensure_frontend_deps() -> None:
     # Consider installed if node_modules/.pnpm exists (pnpm layout) or package dir for next exists
     next_pkg = modules / "next"
     if modules.exists() and next_pkg.exists():
-        ok("Node modules already installed — skipping install")
+        ok("Node modules already installed -- skipping install")
         return
 
-    warn("Node modules not found. Running `pnpm install`…")
-    _run(["pnpm", "install"], cwd=FRONTEND)
+    warn("Node modules not found. Running `pnpm install`...")
+    _run([_pnpm_cmd(), "install"], cwd=FRONTEND)
     ok("Frontend dependencies installed")
 
 
-# ── Start servers ─────────────────────────────────────────────────────────────
+# -- Start servers -------------------------------------------------------------
 
 def _free_port(port: int) -> None:
     """Kill any process currently listening on *port* (Linux/macOS only)."""
@@ -168,14 +203,14 @@ def _free_port(port: int) -> None:
         if pids:
             time.sleep(1)  # give processes a moment to exit
     except FileNotFoundError:
-        pass  # fuser not installed — skip
+        pass  # fuser not installed -- skip
 
 
 def start_servers() -> None:
     head("Starting servers")
 
     # Kill any stale processes from a previous run
-    info("Freeing ports 8000 and 3000…")
+    info("Freeing ports 8000 and 3000...")
     _free_port(8000)
     _free_port(3000)
     # Remove stale Next.js dev lock if present
@@ -184,12 +219,8 @@ def start_servers() -> None:
         lock.unlink()
 
     # Resolve the uv-managed Python / uvicorn
-    if IS_WIN:
-        uvicorn_cmd = ["uv", "run", "uvicorn"]
-        pnpm_cmd = ["pnpm.cmd"]
-    else:
-        uvicorn_cmd = ["uv", "run", "uvicorn"]
-        pnpm_cmd = ["pnpm"]
+    uvicorn_cmd = ["uv", "run", "uvicorn"]
+    pnpm_cmd = [_pnpm_cmd()]
 
     backend_cmd = uvicorn_cmd + [
         "src.serving.api:app",
@@ -198,21 +229,21 @@ def start_servers() -> None:
     ]
     frontend_cmd = pnpm_cmd + ["dev"]
 
-    info("Starting FastAPI  → http://localhost:8000")
+    info("Starting FastAPI  -> http://localhost:8000")
     backend = subprocess.Popen(backend_cmd, cwd=str(ROOT))
 
-    info("Starting Next.js  → http://localhost:3000")
+    info("Starting Next.js  -> http://localhost:3000")
     frontend = subprocess.Popen(frontend_cmd, cwd=str(FRONTEND))
 
     print()
-    print(_c("1", "  Backend  →") + " http://localhost:8000")
-    print(_c("1", "  Frontend →") + " http://localhost:3000")
-    print(_c("1", "  API Docs →") + " http://localhost:8000/docs")
+    print(_c("1", "  Backend  ->") + " http://localhost:8000")
+    print(_c("1", "  Frontend ->") + " http://localhost:3000")
+    print(_c("1", "  API Docs ->") + " http://localhost:8000/docs")
     print()
     print(_c("33", "  Press Ctrl-C to stop both servers."))
     print()
 
-    # ── Cleanup on exit ───────────────────────────────────────────────────────
+    # -- Cleanup on exit -------------------------------------------------------
     _stopping = False
 
     def _stop(signum=None, frame=None) -> None:
@@ -223,7 +254,7 @@ def start_servers() -> None:
         # Reset handlers to defaults so re-entrant signals don't loop
         signal.signal(signal.SIGINT, signal.SIG_DFL)
         signal.signal(signal.SIGTERM, signal.SIG_DFL)
-        print("\nStopping servers…")
+        print("\nStopping servers...")
         for proc in (backend, frontend):
             try:
                 proc.terminate()
@@ -257,7 +288,7 @@ def start_servers() -> None:
         time.sleep(1)
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+# -- Entry point ---------------------------------------------------------------
 
 if __name__ == "__main__":
     print(_c("1;36", "\n=== Jamuna Bankline Prediction System ===\n"))
