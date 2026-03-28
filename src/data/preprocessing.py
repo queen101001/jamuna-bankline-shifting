@@ -103,15 +103,14 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
 
     Sign convention (from dataset definition)
     ------------------------------------------
-    Left bank  : positive bank_distance = EROSION,  negative = DEPOSITION
-    Right bank : negative bank_distance = EROSION,  positive = DEPOSITION
+    Both banks : negative bank_distance = EROSION,  positive = DEPOSITION
+    Bank side does NOT affect sign interpretation.
 
     New columns
     -----------
     erosion_indicator : unified direction feature — always POSITIVE = erosion,
                         NEGATIVE = deposition, regardless of bank side.
-                        Left bank  : erosion_indicator =  bank_distance
-                        Right bank : erosion_indicator = -bank_distance
+                        erosion_indicator = -bank_distance for both banks.
                         This is the primary physically-consistent feature for
                         the model and for frontend display.
 
@@ -124,22 +123,18 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
 
     rolling_mean_3    : 3-point rolling mean of bank_distance per series.
 
-    net_channel_erosion: left_bank_distance − right_bank_distance per reach/year.
+    net_channel_erosion: -(left_bank_distance + right_bank_distance) per reach/year.
                         Positive when both banks are eroding simultaneously
                         (channel widening under erosion pressure).
-                        Formula: left(+erosion) + right(+erosion as -right_dist)
-                               = left_bank_distance - right_bank_distance
+                        Both banks eroding = both have large negative values,
+                        so -(left + right) is positive.
 
     series_id         : string label "R01_right", etc.
     """
     df = df.copy().sort_values(["reach_id", "bank_side", "year"])
 
-    # erosion_indicator: flip right bank so positive always means erosion
-    df["erosion_indicator"] = np.where(
-        df["bank_side"] == "left",
-        df["bank_distance"],          # left:  +ve = erosion (no flip)
-        -df["bank_distance"],         # right: -ve = erosion → flip sign
-    )
+    # erosion_indicator: negate bank_distance so positive always means erosion
+    df["erosion_indicator"] = -df["bank_distance"]
 
     # rate_of_change (raw first-difference within each series)
     df["rate_of_change"] = (
@@ -175,25 +170,22 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
 
 def _add_net_channel_erosion(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Compute net_channel_erosion = left_bank_distance − right_bank_distance
+    Compute net_channel_erosion = -(left_bank_distance + right_bank_distance)
     per (reach_id, year) and broadcast to all rows of that reach/year.
 
     Physical meaning (given sign convention)
     -----------------------------------------
-    Left bank  erosion = +left_bank_distance
-    Right bank erosion = -right_bank_distance
+    Both banks : negative bank_distance = erosion
+    Both banks eroding = both have large negative values
 
-    net_channel_erosion = left_bank_distance - right_bank_distance
-                        = (left erosion signal) + (right erosion signal)
+    net_channel_erosion = -(left + right)
+                        = sum of erosion signals for both banks
 
     Interpretation
     --------------
     Large positive : both banks eroding — channel under severe pressure
     Near zero      : banks in balance (both stable, or one eroding / one depositing)
     Large negative : both banks depositing — reach accumulating sediment
-
-    This replaces the old `channel_width = right - left` which had the
-    wrong sign interpretation under the actual dataset convention.
     """
     right = (
         df[df["bank_side"] == "right"][["reach_id", "year", "bank_distance"]]
@@ -204,8 +196,8 @@ def _add_net_channel_erosion(df: pd.DataFrame) -> pd.DataFrame:
         .rename(columns={"bank_distance": "_lb"})
     )
     merged = right.merge(left, on=["reach_id", "year"], how="inner")
-    # left(+erosion) - right(+deposition) → positive = both banks eroding
-    merged["net_channel_erosion"] = merged["_lb"] - merged["_rb"]
+    # -(left + right): both eroding (both negative) → positive result
+    merged["net_channel_erosion"] = -(merged["_lb"] + merged["_rb"])
     merged = merged[["reach_id", "year", "net_channel_erosion"]]
 
     df = df.merge(merged, on=["reach_id", "year"], how="left")

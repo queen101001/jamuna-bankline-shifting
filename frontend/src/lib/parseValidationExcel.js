@@ -12,8 +12,8 @@ const RIGHT_BANK_RE = /Right Bank/i;
  *   Row 2:         | Right Bank (m) | Left Bank (m) | Right Bank (m) | ...
  *   Row 3+: 1      | 2361.95        | 1712.42       | ...
  *
- * Left Bank values are multiplied by -1 to match the system's corrected
- * coordinate space.
+ * Both banks use the same sign convention: negative = erosion, positive = deposition.
+ * No sign transformation is applied.
  *
  * @param {ArrayBuffer} buffer - File contents as ArrayBuffer
  * @returns {{ years: number[], data: Array<{reach_id: number, bank_side: string, year: number, observed: number}> }}
@@ -89,11 +89,6 @@ export default function parseValidationExcel(buffer) {
       if (raw == null || raw === '' || isNaN(Number(raw))) continue;
 
       let value = Number(raw);
-
-      // Apply Left Bank * (-1) normalization
-      if (bankSide === 'left') {
-        value = value * -1;
-      }
 
       data.push({
         reach_id: reach,

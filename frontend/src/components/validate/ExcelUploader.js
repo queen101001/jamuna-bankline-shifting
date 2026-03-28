@@ -172,7 +172,7 @@ export default function ExcelUploader() {
               <li><strong>Row 1</strong>: "Reaches" in col A, then "Distance(YYYY)" for each year (2021-2025)</li>
               <li><strong>Row 2</strong>: Empty col A, then alternating "Right Bank (m)" / "Left Bank (m)" sub-headers</li>
               <li><strong>Row 3+</strong>: Reach number (1-50) in col A, followed by bank distance values in meters</li>
-              <li>Sign convention: Left bank positive = erosion, Right bank negative = erosion</li>
+              <li>Sign convention: Negative = erosion, Positive = deposition (both banks)</li>
             </ul>
           </div>
         )}

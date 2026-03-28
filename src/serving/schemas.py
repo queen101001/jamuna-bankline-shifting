@@ -129,8 +129,7 @@ class QuantileForecast(BaseModel):
         ...,
         description=(
             "Median forecast of bank_distance (meters). "
-            "Sign convention: Left bank — positive = erosion, negative = deposition. "
-            "Right bank — negative = erosion, positive = deposition."
+            "Negative = erosion, positive = deposition (both banks)."
         ),
     )
     q10: float | None = Field(None, description="10th percentile of bank_distance forecast (lower bound, same sign convention as q50)")
@@ -148,8 +147,7 @@ class SeriesForecast(BaseModel):
         ...,
         description=(
             "Last known bank_distance in meters. "
-            "Left bank: positive = erosion, negative = deposition. "
-            "Right bank: negative = erosion, positive = deposition."
+            "Negative = erosion, positive = deposition (both banks)."
         ),
     )
     forecasts: list[QuantileForecast]
@@ -277,8 +275,7 @@ class YearPointForecast(BaseModel):
         ...,
         description=(
             "Median predicted bank_distance (meters). "
-            "Left bank: positive = erosion, negative = deposition. "
-            "Right bank: negative = erosion, positive = deposition."
+            "Negative = erosion, positive = deposition (both banks)."
         ),
     )
     q10: float | None = Field(None, description="10th percentile (lower bound)")

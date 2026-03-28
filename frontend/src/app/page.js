@@ -19,7 +19,7 @@ export default function DashboardPage() {
         </h1>
         <p className="text-sm max-w-xl mx-auto" style={{ color: 'var(--text-dim)' }}>
           Select a forecast year and algorithm to view predicted bankline positions for all 50 reaches.
-          Left bank positive = erosion · Right bank negative = erosion.
+          Negative = erosion · Positive = deposition (both banks).
         </p>
       </div>
 

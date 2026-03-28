@@ -47,19 +47,19 @@ const validate = {
       ],
     },
     {
-      id: 'left-bank-negation',
-      heading: 'Left Bank Sign Handling',
+      id: 'sign-convention',
+      heading: 'Sign Convention',
       icon: 'ArrowLeftRight',
       blocks: [
         {
           type: 'text',
           content:
-            'When you upload your data, the system automatically handles the sign convention for left bank values. You should upload raw positive distance values for both banks — the system will negate left bank values internally to match the model\'s sign convention.',
+            'The sign convention is the same for both banks: negative values indicate erosion (bank moving toward the river) and positive values indicate deposition (bank growing outward). No sign transformation is applied to uploaded data.',
         },
         {
           type: 'text',
           content:
-            'You do NOT need to manually negate left bank values in your Excel file. Just provide the measured distance as a positive number.',
+            'Provide your measured distances with the correct sign in the Excel file. Negative = erosion, positive = deposition for both left and right banks.',
         },
       ],
     },

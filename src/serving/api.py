@@ -889,7 +889,7 @@ def export_predictions(
     Export predicted bankline positions as an Excel file matching the original
     2-row header format (Reaches × Distance(Year) × Right/Left Bank).
 
-    Left bank values are multiplied by -1 to match the raw Excel sign convention.
+    Values are exported directly without sign transformation.
     """
     _require_data()
     assert state.df_full is not None
@@ -972,7 +972,7 @@ def export_predictions(
             if right_val is not None:
                 ws.cell(row=row, column=col, value=right_val)
             if left_val is not None:
-                ws.cell(row=row, column=col + 1, value=-left_val)  # sign reversal
+                ws.cell(row=row, column=col + 1, value=left_val)
             col += 2
 
     buf = BytesIO()
@@ -1352,7 +1352,7 @@ def _rolling_forecast(
                     left_bd = round_preds.get((reach_id, "left"), [None] * steps_this_round)[t]
                     right_bd = round_preds.get((reach_id, "right"), [None] * steps_this_round)[t]
                     if left_bd is not None and right_bd is not None and np.isfinite(left_bd) and np.isfinite(right_bd):
-                        net_erosion[reach_id] = left_bd - right_bd
+                        net_erosion[reach_id] = -(left_bd + right_bd)
 
             for reach_id, bank_side in series_keys:
                 reach_id = int(reach_id)
@@ -1377,7 +1377,7 @@ def _rolling_forecast(
                 ].sort_values("time_idx")["bank_distance"].iloc[-2:].tolist()
                 prev2 = [v for v in prev2 if np.isfinite(v)]
 
-                erosion_indicator = q50 if bank_side == "left" else -q50
+                erosion_indicator = -q50
                 rolling_mean_3 = float(np.mean((prev2 + [q50])[-3:])) if prev2 else q50
 
                 row: dict = {

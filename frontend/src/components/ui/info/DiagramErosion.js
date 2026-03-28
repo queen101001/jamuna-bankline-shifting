@@ -22,7 +22,7 @@ export default function DiagramErosion() {
         {/* Left erosion arrow (pointing right, into river = land loss) */}
         <line x1="85" y1="80" x2="115" y2="80" stroke="#ef4444" strokeWidth="2" markerEnd="url(#arrowRed)" />
         <text x="60" y="78" textAnchor="middle" fill="#ef4444" fontSize="9" fontWeight="500">
-          +value
+          −value
         </text>
         <text x="60" y="90" textAnchor="middle" fill="#ef4444" fontSize="8">
           = Erosion
@@ -31,7 +31,7 @@ export default function DiagramErosion() {
         {/* Left deposition arrow (pointing left, away from river = land gain) */}
         <line x1="85" y1="130" x2="55" y2="130" stroke="#22c55e" strokeWidth="2" markerEnd="url(#arrowGreen)" />
         <text x="60" y="148" textAnchor="middle" fill="#22c55e" fontSize="9" fontWeight="500">
-          −value
+          +value
         </text>
         <text x="60" y="160" textAnchor="middle" fill="#22c55e" fontSize="8">
           = Deposition
@@ -73,7 +73,7 @@ export default function DiagramErosion() {
 
         {/* Title */}
         <text x="160" y="192" textAnchor="middle" fill="#64748b" fontSize="9">
-          Sign convention: opposite for each bank side
+          Sign convention: same for both banks
         </text>
       </svg>
     </div>

@@ -2,11 +2,9 @@
 
 /**
  * Sign convention:
- *   Left bank:  q50 > 0 → Erosion (red),  q50 < 0 → Deposition (green)
- *   Right bank: q50 < 0 → Erosion (red),  q50 > 0 → Deposition (green)
+ *   Both banks: q50 < 0 → Erosion (red), q50 > 0 → Deposition (green)
  */
 function isErosion(bankSide, q50) {
-  if (bankSide === 'left') return q50 > 0;
   return q50 < 0;
 }
 

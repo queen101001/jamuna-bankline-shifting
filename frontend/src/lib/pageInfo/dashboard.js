@@ -65,20 +65,20 @@ const dashboard = {
         {
           type: 'text',
           content:
-            'The sign (positive or negative) of a distance value tells you whether the bank is eroding or growing. This works differently for left and right banks:',
+            'The sign (positive or negative) of a distance value tells you whether the bank is eroding or growing. The convention is the same for both banks:',
         },
         { type: 'diagram', component: 'erosion' },
         {
           type: 'text',
           content:
-            'Left Bank:\n  • Positive (+) distance → Erosion (bank moving toward river, land is lost)\n  • Negative (−) distance → Deposition (bank growing outward, land is gained)\n\nRight Bank:\n  • Negative (−) distance → Erosion (bank moving toward river, land is lost)\n  • Positive (+) distance → Deposition (bank growing outward, land is gained)',
+            'Both Banks:\n  • Negative (−) distance → Erosion (bank moving toward river, land is lost)\n  • Positive (+) distance → Deposition (bank growing outward, land is gained)\n\nThe sign convention is the same for left and right banks.',
         },
         {
           type: 'tip',
-          variant: 'warning',
-          title: 'Why is it reversed?',
+          variant: 'info',
+          title: 'Uniform convention',
           content:
-            'Because the left and right banks face opposite directions. Erosion always means "the bank moved toward the river center." On the left bank that\'s the positive direction; on the right bank it\'s the negative direction.',
+            'The sign convention is consistent across both banks: negative always means erosion (land loss) and positive always means deposition (land gain), regardless of which side of the river you are looking at.',
         },
       ],
     },

@@ -2,7 +2,6 @@ import { ArrowLeft, AlertTriangle, TrendingDown, TrendingUp } from 'lucide-react
 import Link from 'next/link';
 
 function isErosion(bankSide, value) {
-  if (bankSide === 'left') return value > 0;
   return value < 0;
 }
 
