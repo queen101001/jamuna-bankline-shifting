@@ -3,7 +3,12 @@
     "allow": [
       "Bash(pip install:*)",
       "Bash(where pnpm:*)",
-      "Bash(python -m uv --version)"
+      "Bash(python -m uv --version)",
+      "Bash(pnpm build)",
+      "Bash(git commit:*)"
+    ],
+    "additionalDirectories": [
+      "/home/dark_alpha/.claude/projects/-home-dark-alpha-Desktop-puja-thesis-project-2-jamuna-bankline-shifting"
     ]
   }
 }
