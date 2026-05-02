@@ -610,6 +610,48 @@ def predict_baseline_year(
 # ── Evaluation metrics ────────────────────────────────────────────────────────
 
 
+def _baseline_compare_window(
+    series: pd.DataFrame,
+    splits: object,
+    fallback_horizon: int,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Return history/evaluation windows for baseline comparison metrics."""
+    ordered = series.sort_values("year").copy()
+    if len(ordered) < 2:
+        return ordered.iloc[0:0], ordered.iloc[0:0]
+
+    test_start_year = getattr(splits, "test_start_year", None)
+    if test_start_year is not None:
+        history = ordered[ordered["year"] < test_start_year]
+        evaluation = ordered[ordered["year"] >= test_start_year]
+        if len(history) >= 2 and len(evaluation) > 0:
+            return history, evaluation
+
+    val_end_year = getattr(splits, "val_end_year", None)
+    if val_end_year is not None:
+        history = ordered[ordered["year"] <= val_end_year]
+        evaluation = ordered[ordered["year"] > val_end_year]
+        if len(history) >= 2 and len(evaluation) > 0:
+            return history, evaluation
+
+    train_end_year = getattr(splits, "train_end_year", None)
+    if train_end_year is not None:
+        history = ordered[ordered["year"] <= train_end_year]
+        evaluation = ordered[ordered["year"] > train_end_year]
+        if len(history) >= 2 and len(evaluation) > 0:
+            return history, evaluation
+
+    horizon = min(max(int(fallback_horizon), 1), len(ordered) - 2)
+    if horizon <= 0:
+        return ordered.iloc[0:0], ordered.iloc[0:0]
+    return ordered.iloc[:-horizon], ordered.iloc[-horizon:]
+
+
+def _append_finite_metric(values: list[float], value: float) -> None:
+    if np.isfinite(value):
+        values.append(float(value))
+
+
 @app.get("/evaluate/compare", response_model=CompareResponse, tags=["Evaluation"])
 def evaluate_compare() -> CompareResponse:
     """
@@ -624,6 +666,7 @@ def evaluate_compare() -> CompareResponse:
     from src.models.baselines import compute_metrics
 
     splits = state.settings.data.splits
+    fallback_horizon = state.settings.tft.prediction_length
     results: list[ModelMetrics] = []
 
     # TFT metrics from pre-computed CSV
@@ -648,6 +691,7 @@ def evaluate_compare() -> CompareResponse:
     # Baseline metrics — evaluate each loaded baseline on test split
     for model_name, models_dict in sorted(state.baseline_models.items()):
         all_nse, all_rmse, all_mae, all_kge = [], [], [], []
+        n_eval = 0
         for key, model in models_dict.items():
             parts = key.rsplit("_", 1)
             if len(parts) != 2:
@@ -659,27 +703,25 @@ def evaluate_compare() -> CompareResponse:
                 & (state.df_full["bank_side"] == bank_side)
             ].sort_values("year")
 
-            train = series[series["year"] <= splits.train_end_year]
-            test = series[series["year"] > splits.train_end_year]
+            train, test = _baseline_compare_window(series, splits, fallback_horizon)
             if len(test) == 0 or len(train) < 2:
                 continue
 
             try:
-                preds = model.predict(train, n_steps=len(test))
-                actuals = test["bank_distance"].values
-                m = compute_metrics(actuals, preds)
-                if not np.isnan(m["NSE"]):
-                    all_nse.append(m["NSE"])
-                if not np.isnan(m["RMSE"]):
-                    all_rmse.append(m["RMSE"])
-                if not np.isnan(m["MAE"]):
-                    all_mae.append(m["MAE"])
-                if not np.isnan(m["KGE"]):
-                    all_kge.append(m["KGE"])
+                preds = np.asarray(model.predict(train, n_steps=len(test)), dtype=float)
+                actuals = test["bank_distance"].to_numpy(dtype=float)
+                n = min(len(actuals), len(preds))
+                if n == 0:
+                    continue
+                m = compute_metrics(actuals[:n], preds[:n])
+                _append_finite_metric(all_nse, m["NSE"])
+                _append_finite_metric(all_rmse, m["RMSE"])
+                _append_finite_metric(all_mae, m["MAE"])
+                _append_finite_metric(all_kge, m["KGE"])
+                n_eval += 1
             except Exception:
                 continue
 
-        n_eval = max(len(all_nse), 1)
         results.append(ModelMetrics(
             model_name=model_name,
             nse=float(np.mean(all_nse)) if all_nse else None,
